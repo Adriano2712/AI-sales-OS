@@ -23,6 +23,7 @@ class CompanyRead(BaseModel):
     country: str
     phone: str | None
     website: str | None
+    email: str | None
     status: CompanyStatus
     needs_review: bool
     do_not_contact: bool

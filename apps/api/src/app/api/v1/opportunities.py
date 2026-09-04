@@ -31,6 +31,7 @@ def _to_detail(opportunity: Opportunity, company: Company) -> OpportunityDetailR
         company_state=company.state,
         company_phone=company.phone,
         company_website=company.website,
+        company_email=company.email,
         next_action=derive_next_action(opportunity.status),
         company_do_not_contact=company.do_not_contact,
     )

@@ -19,3 +19,4 @@ class AuditEventType(str, enum.Enum):
     FEEDBACK_ADDED = "feedback_added"
     DAILY_DIGEST_SENT = "daily_digest_sent"
     DAILY_SITE_DIAGNOSTIC_SENT = "daily_site_diagnostic_sent"
+    EMAIL_DRAFT_CREATED = "email_draft_created"

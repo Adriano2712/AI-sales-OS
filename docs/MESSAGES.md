@@ -79,6 +79,29 @@ Nenhuma integração real com WhatsApp/email/LinkedIn. "Marcar como enviada"
 quiser, fora do sistema. `response` é texto livre que o humano loga
 manualmente se receber uma resposta; o sistema não busca nem inventa isso.
 
+## Rascunho no Gmail (canal EMAIL, post-Fase-8) — ainda não é envio
+
+`POST /api/v1/messages/{id}/gmail-draft` (só pra mensagens `EMAIL`
+`APPROVED`) cria um rascunho de verdade na pasta de Rascunhos do Gmail
+configurado (`notifications/gmail_draft.py`, via IMAP) — endereçado ao
+`Company.email` (ver abaixo), com o texto já aprovado. **Não envia nada** —
+o rascunho fica lá esperando o humano revisar e mandar, mesma filosofia do
+resto da Fase 8. Usa a mesma Senha de App do Gmail já configurada pro
+digest diário (`GMAIL_SMTP_USER`/`GMAIL_SMTP_APP_PASSWORD`), sem credencial
+nova. A pasta de rascunhos é descoberta via a flag IMAP `\Drafts`
+(RFC 6154), nunca fixada como `[Gmail]/Drafts` — o nome muda com o idioma
+da conta (confirmado numa validação real: a conta usada aqui é
+`[Gmail]/Rascunhos`, não a versão em inglês).
+
+### `Company.email` — de onde vem
+
+Nunca coletado na descoberta (nenhum provider expõe isso). Preenchido por
+`website_analysis/service.py` a partir do primeiro link `mailto:` real
+encontrado ao crawlear o próprio site da empresa — mesma regra de nunca
+sobrescrever um valor já conhecido que `merge_missing_fields` já aplica a
+telefone/site. Sem site, ou sem `mailto:` no site, fica `None` — o botão de
+rascunho simplesmente não aparece nesse caso.
+
 ## Fora de escopo
 
 Feedback loop (spec seção 61 — "primeiro coletar dados", ainda não existe

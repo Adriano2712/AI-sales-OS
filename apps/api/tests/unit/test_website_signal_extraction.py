@@ -63,6 +63,7 @@ def test_extract_page_signals_full_page():
     assert signals.has_nav is True
     assert signals.has_custom_stylesheet is True
     assert signals.word_count > 0
+    assert signals.email == "contato@example.com"
 
 
 def test_extract_page_signals_empty_html_never_fabricates():
@@ -71,6 +72,7 @@ def test_extract_page_signals_empty_html_never_fabricates():
     assert signals.meta_description is None
     assert signals.has_viewport_meta is False
     assert signals.has_contact_form is False
+    assert signals.email is None
 
 
 def test_extract_page_signals_minimal_page_has_no_false_positives():
@@ -79,6 +81,22 @@ def test_extract_page_signals_minimal_page_has_no_false_positives():
     assert signals.has_contact_form is False
     assert signals.has_phone_link is False
     assert signals.title is None
+    assert signals.email is None
+
+
+def test_extract_page_signals_strips_mailto_query_string():
+    html = '<a href="mailto:contato@example.com?subject=Ol%C3%A1">Email</a>'
+    signals = extract_page_signals(html, PageType.HOMEPAGE, 200)
+    assert signals.email == "contato@example.com"
+
+
+def test_extract_page_signals_uses_first_mailto_when_several():
+    html = """
+    <a href="mailto:primeiro@example.com">A</a>
+    <a href="mailto:segundo@example.com">B</a>
+    """
+    signals = extract_page_signals(html, PageType.HOMEPAGE, 200)
+    assert signals.email == "primeiro@example.com"
 
 
 _LINKS_HTML = """

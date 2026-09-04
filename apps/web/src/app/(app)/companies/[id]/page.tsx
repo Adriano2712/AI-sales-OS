@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 
 import { updateCompanyDoNotContactAction, updateCompanyStatusAction } from "@/app/(app)/companies/actions";
-import { PhoneLink, WebsiteLink } from "@/components/ContactInfo";
+import { EmailLink, PhoneLink, WebsiteLink } from "@/components/ContactInfo";
 import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
 import { requireUser } from "@/lib/requireUser";
@@ -60,6 +60,10 @@ export default async function CompanyDetailPage({
           <dt className="text-gray-500">Website</dt>
           <dd className="text-gray-900">
             <WebsiteLink website={company.website} />
+          </dd>
+          <dt className="text-gray-500">Email</dt>
+          <dd className="text-gray-900">
+            <EmailLink email={company.email} />
           </dd>
           <dt className="text-gray-500">Status</dt>
           <dd className="text-gray-900">{company.status}</dd>

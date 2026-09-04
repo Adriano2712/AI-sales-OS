@@ -12,6 +12,7 @@ export interface Company {
   country: string;
   phone: string | null;
   website: string | null;
+  email: string | null;
   status: CompanyStatus;
   needs_review: boolean;
   do_not_contact: boolean;

@@ -41,6 +41,7 @@ export interface OpportunityDetail extends Opportunity {
   company_state: string;
   company_phone: string | null;
   company_website: string | null;
+  company_email: string | null;
   next_action: string;
   company_do_not_contact: boolean;
 }

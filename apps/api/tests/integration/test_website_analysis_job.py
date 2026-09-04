@@ -48,6 +48,7 @@ _HOMEPAGE_HTML = """
   <nav>menu</nav>
   <a href="/contato">Contato</a>
   <a href="tel:+551533334444">Ligue</a>
+  <a href="mailto:contato@mocksite.example">Email</a>
   <p>""" + ("palavra " * 150) + """</p>
 </body></html>
 """
@@ -155,6 +156,9 @@ async def test_website_analysis_job_creates_score_and_pages(app_session_factory,
             # diagnostic paragraph called (via the fake provider above).
             assert isinstance(analysis.findings["problems"], list)
             assert analysis.findings["ai_diagnostic"] == "Test business impact paragraph."
+
+            updated_company = await session.get(Company, company_id)
+            assert updated_company.email == "contato@mocksite.example"
 
             updated_job = await session.get(Job, job_id)
             assert updated_job.status == JobStatus.COMPLETED
@@ -434,6 +438,80 @@ async def test_no_api_key_still_produces_deterministic_problems(app_session_fact
 
             updated_job = await session.get(Job, job_id)
             assert updated_job.status == JobStatus.COMPLETED
+    finally:
+        async with admin_factory() as admin_db:
+            tenant = await admin_db.get(Tenant, tenant_id)
+            if tenant is not None:
+                await admin_db.delete(tenant)
+                await admin_db.commit()
+        await admin_engine.dispose()
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_crawl_never_overwrites_an_already_known_email(app_session_factory, monkeypatch):
+    """Same non-destructive rule as companies/service.py's
+    merge_missing_fields, just from a different source (the crawl itself)."""
+    import app.modules.website_analysis.service as website_service
+
+    tenant_id = uuid.uuid4()
+    admin_engine = create_async_engine(ADMIN_DATABASE_URL)
+    admin_factory = async_sessionmaker(admin_engine, expire_on_commit=False, class_=AsyncSession)
+
+    from app.modules.tenancy.models import Tenant
+
+    async with admin_factory() as admin_db:
+        tenant = Tenant(id=tenant_id, name=f"Website Email Keep Tenant {uuid.uuid4().hex[:6]}")
+        admin_db.add(tenant)
+        await admin_db.commit()
+
+    try:
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            company = Company(
+                tenant_id=tenant_id,
+                name="Restaurante Email Conhecido",
+                normalized_name="restaurante email conhecido",
+                segment="restaurants",
+                city="Sorocaba",
+                state="SP",
+                country="BR",
+                website="https://mocksite.example",
+                email="ja-tinha@exemplo.com",
+                status=CompanyStatus.DISCOVERED,
+            )
+            session.add(company)
+            await session.flush()
+            job = Job(
+                tenant_id=tenant_id,
+                type=JobType.WEBSITE_ANALYSIS,
+                status=JobStatus.PENDING,
+                idempotency_key=str(company.id),
+            )
+            session.add(job)
+            await session.commit()
+            company_id, job_id = company.id, job.id
+
+        mock_transport = httpx.MockTransport(_mock_handler)
+        monkeypatch.setattr(
+            website_service,
+            "WebsiteCrawler",
+            lambda: WebsiteCrawler(transport=mock_transport),
+        )
+
+        import app.modules.jobs.handlers.website_analysis as handler
+
+        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _FakeAIProvider())
+        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+
+        await handler._run(str(job_id), str(tenant_id), str(company_id))
+
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            updated_company = await session.get(Company, company_id)
+            # _mock_handler's homepage has a real mailto: link — proves this
+            # is a deliberate no-overwrite, not just an empty crawl result.
+            assert updated_company.email == "ja-tinha@exemplo.com"
     finally:
         async with admin_factory() as admin_db:
             tenant = await admin_db.get(Tenant, tenant_id)

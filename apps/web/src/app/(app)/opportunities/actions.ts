@@ -60,6 +60,21 @@ export async function generateMessageAction(
   revalidatePath(`/opportunities/${opportunityId}`);
 }
 
+export async function createGmailDraftAction(
+  messageId: string,
+  opportunityId: string
+): Promise<void> {
+  const response = await apiFetch(`/api/v1/messages/${messageId}/gmail-draft`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Criar rascunho no Gmail falhou (${response.status}): ${body}`);
+  }
+
+  revalidatePath(`/opportunities/${opportunityId}`);
+}
+
 export async function updateMessageAction(
   messageId: string,
   opportunityId: string,

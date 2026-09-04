@@ -28,6 +28,17 @@ export function PhoneLink({ phone }: { phone: string | null }) {
   );
 }
 
+export function EmailLink({ email }: { email: string | null }) {
+  if (!email) {
+    return <span className="text-gray-400">Não informado</span>;
+  }
+  return (
+    <a href={`mailto:${email}`} className="text-gray-700 hover:text-blue-600 hover:underline">
+      {email}
+    </a>
+  );
+}
+
 export function WebsiteLink({ website }: { website: string | null }) {
   if (!website) {
     return <span className="text-gray-400">Não informado</span>;

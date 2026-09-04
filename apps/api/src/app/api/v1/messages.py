@@ -1,15 +1,17 @@
+import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.modules.audit.enums import AuditEventType
 from app.modules.audit.service import log_event
 from app.modules.companies.service import get_company
 from app.modules.jobs.enums import JobType
 from app.modules.jobs.queue import get_queue
 from app.modules.jobs.service import get_or_create_job
-from app.modules.messages.enums import MessageStatus
+from app.modules.messages.enums import MessageChannel, MessageStatus
 from app.modules.messages.schemas import MessageGenerateRequest, MessageRead, MessageUpdate
 from app.modules.messages.service import (
     CompanyDoNotContact,
@@ -19,6 +21,7 @@ from app.modules.messages.service import (
     list_messages_for_opportunity,
     update_message,
 )
+from app.modules.notifications.gmail_draft import GmailDraftError, create_gmail_draft
 from app.modules.opportunities.service import get_opportunity
 from app.modules.tenancy.dependencies import get_tenant_context, get_tenant_db, require_write_access
 from app.modules.tenancy.schemas import TenantContext
@@ -131,3 +134,74 @@ async def update_message_endpoint(
 
     await db.commit()
     return MessageRead.model_validate(message)
+
+
+@router.post("/messages/{message_id}/gmail-draft", response_model=dict)
+async def create_gmail_draft_endpoint(
+    message_id: uuid.UUID,
+    context: TenantContext = Depends(require_write_access()),
+    db: AsyncSession = Depends(get_tenant_db),
+) -> dict:
+    """Creates a real draft in the operator's own Gmail Drafts folder,
+    addressed to the company's email — never sends anything (spec: outreach
+    send stays a human action, same reasoning as "mark as sent"). Alternative
+    to that button for the EMAIL channel specifically, since there's now
+    somewhere better than copy-paste to review it before sending."""
+    message = await get_message(db, context.tenant_id, message_id)
+    if message is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    if message.channel != MessageChannel.EMAIL:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Gmail draft is only available for the EMAIL channel",
+        )
+    if message.status != MessageStatus.APPROVED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Message must be APPROVED before creating a draft",
+        )
+
+    opportunity = await get_opportunity(db, context.tenant_id, message.opportunity_id)
+    if opportunity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opportunity not found")
+    company = await get_company(db, context.tenant_id, opportunity.company_id)
+    if company is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+    if company.do_not_contact:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Company is flagged do_not_contact",
+        )
+    if not company.email:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Company has no known email address yet",
+        )
+
+    settings = get_settings()
+    if not (settings.gmail_smtp_user and settings.gmail_smtp_app_password):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Gmail is not configured (GMAIL_SMTP_USER / GMAIL_SMTP_APP_PASSWORD)",
+        )
+
+    try:
+        await asyncio.to_thread(
+            create_gmail_draft,
+            settings.gmail_smtp_user,
+            settings.gmail_smtp_app_password,
+            company.email,
+            f"Sobre a presença digital de {company.name}",
+            message.generated_text,
+        )
+    except GmailDraftError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    await log_event(
+        db,
+        context.tenant_id,
+        AuditEventType.EMAIL_DRAFT_CREATED,
+        {"message_id": str(message.id), "company_email": company.email},
+    )
+    await db.commit()
+    return {"status": "draft_created"}

@@ -100,6 +100,10 @@ companies.do_not_contact  -- column added to Fase 2's companies table
 
 # Post-Fase-8 (daily digest)
 companies.campaign_run_id  -- FK to campaign_runs, nullable, set only at creation (see docs/DAILY_DIGEST.md)
+
+# Post-Fase-8 (sales pipeline outcome + Gmail draft)
+opportunities.outcome, opportunities.outcome_notes  -- see docs/OPPORTUNITIES.md
+companies.email  -- filled in by website_analysis from a real mailto: link, see docs/MESSAGES.md
 ```
 
 Remaining product entities (`opportunities`, ...) are added in

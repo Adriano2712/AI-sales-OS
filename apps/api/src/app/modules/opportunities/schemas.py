@@ -50,6 +50,7 @@ class OpportunityDetailRead(OpportunityRead):
     company_state: str
     company_phone: str | None
     company_website: str | None
+    company_email: str | None
     # Spec section 46's dashboard field — computed from `status`, not stored
     # (see opportunities/scoring.py:derive_next_action).
     next_action: str

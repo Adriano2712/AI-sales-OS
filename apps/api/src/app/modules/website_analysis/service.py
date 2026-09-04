@@ -78,6 +78,15 @@ async def analyze_website(
             )
         )
 
+    # Real contact info found while crawling the company's own site — never
+    # overwrites a value already known (same non-destructive rule as
+    # companies/service.py's merge_missing_fields, just from a different
+    # source: the crawl itself, not a discovery provider).
+    if not company.email:
+        found_email = next((page.email for page in pages if page.email), None)
+        if found_email:
+            company.email = found_email
+
     sub_scores = compute_sub_scores(pages)
     digital_score = compute_digital_score(sub_scores)
     problems = derive_problems(pages)

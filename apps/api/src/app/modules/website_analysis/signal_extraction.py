@@ -33,6 +33,10 @@ class PageSignals:
     has_custom_stylesheet: bool = False
     word_count: int = 0
     error: str | None = None
+    # The actual address behind the first mailto: link, if any — has_email_link
+    # only says one exists; this is what lets companies/models.py's `email`
+    # actually get filled in (see website_analysis/service.py).
+    email: str | None = None
 
 
 def _as_str(value: str | list[str] | None) -> str:
@@ -98,8 +102,15 @@ def extract_page_signals(html: str, page_type: PageType, http_status: int | None
     links = soup.find_all("a", href=True)
     hrefs = [_as_str(a["href"]) for a in links]
     has_phone_link = any(href.startswith("tel:") for href in hrefs)
-    has_email_link = any(href.startswith("mailto:") for href in hrefs)
+    mailto_hrefs = [href for href in hrefs if href.startswith("mailto:")]
+    has_email_link = bool(mailto_hrefs)
     has_whatsapp_link = any("wa.me" in href or "whatsapp" in href.lower() for href in hrefs)
+
+    email = None
+    if mailto_hrefs:
+        # Strip the mailto: scheme and any query string (e.g. ?subject=...) —
+        # just the address itself.
+        email = mailto_hrefs[0].removeprefix("mailto:").split("?")[0].strip() or None
 
     return PageSignals(
         url="",
@@ -115,6 +126,7 @@ def extract_page_signals(html: str, page_type: PageType, http_status: int | None
         has_nav=bool(soup.find("nav")),
         has_custom_stylesheet=bool(soup.find("link", attrs={"rel": "stylesheet"})),
         word_count=len(soup.get_text().split()),
+        email=email,
     )
 
 

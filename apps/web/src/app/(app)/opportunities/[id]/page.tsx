@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 
 import {
+  createGmailDraftAction,
   generateMessageAction,
   updateMessageAction,
   updateOpportunityOutcomeAction,
@@ -331,16 +332,30 @@ export default async function OpportunityDetailPage({
               )}
 
               {message.status === "APPROVED" && !opportunity.company_do_not_contact && (
-                <form
-                  action={updateMessageAction.bind(null, message.id, opportunity.id, {
-                    status: "SENT",
-                  })}
-                  className="mt-2"
-                >
-                  <button type="submit" className={buttonVariants.primary}>
-                    Marcar como enviada (envio é manual, fora do sistema)
-                  </button>
-                </form>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <form
+                    action={updateMessageAction.bind(null, message.id, opportunity.id, {
+                      status: "SENT",
+                    })}
+                  >
+                    <button type="submit" className={buttonVariants.primary}>
+                      Marcar como enviada (envio é manual, fora do sistema)
+                    </button>
+                  </form>
+
+                  {message.channel === "EMAIL" &&
+                    (opportunity.company_email ? (
+                      <form action={createGmailDraftAction.bind(null, message.id, opportunity.id)}>
+                        <button type="submit" className={buttonVariants.secondary}>
+                          Criar rascunho no Gmail
+                        </button>
+                      </form>
+                    ) : (
+                      <span className="text-xs text-gray-400">
+                        sem email conhecido dessa empresa ainda — rascunho no Gmail indisponível
+                      </span>
+                    ))}
+                </div>
               )}
 
               {message.status === "SENT" && (

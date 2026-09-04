@@ -22,6 +22,10 @@ class Company(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     country: Mapped[str] = mapped_column(String(2), default="BR")
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     website: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Never collected at discovery (providers don't expose it) — filled in
+    # later by website_analysis/service.py from a real mailto: link found
+    # while crawling the company's own site, see signal_extraction.py.
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[CompanyStatus] = mapped_column(
         Enum(CompanyStatus, name="company_status"), default=CompanyStatus.DISCOVERED
     )
