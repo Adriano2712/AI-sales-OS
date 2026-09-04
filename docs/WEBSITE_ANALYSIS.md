@@ -83,6 +83,19 @@ chave configurada, o recurso é pulado silenciosamente — o score e os
 problemas determinísticos continuam funcionando normalmente (nunca
 dependem de IA).
 
+**Real finding (validação em produção, campanha real de 5 clínicas em
+Salvador/BA, 2026-09-04)**: o limite original de `max_length=800` no
+schema (`SiteDiagnosticAIOutput.business_impact`) era apertado demais —
+uma resposta real, genuinamente dentro do que o prompt pedia (parágrafo de
+3-5 frases), ultrapassou 800 caracteres e derrubou o job inteiro de
+`website_analysis` (schema validation error, spec section 37 fazendo
+exatamente o que deveria — rejeitar o que não passa — só que o limite
+estava calibrado errado). Corrigido para `max_length=1600`: continua sendo
+uma rede de segurança real contra resposta descontrolada, sem rejeitar
+saída válida. A empresa afetada foi reprocessada manualmente com sucesso
+depois da correção. Teste de regressão em
+`tests/unit/test_website_ai_diagnostic.py`.
+
 ## Real findings
 
 - **Crawler validated against a real, live third-party site** (not just

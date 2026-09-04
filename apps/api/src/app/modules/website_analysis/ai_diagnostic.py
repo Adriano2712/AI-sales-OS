@@ -9,9 +9,15 @@ explanation is synthesis, not the cheap classification work Haiku is for."""
 
 
 class SiteDiagnosticAIOutput(BaseModel):
-    """Validated by schema before ever being trusted (spec section 37)."""
+    """Validated by schema before ever being trusted (spec section 37).
 
-    business_impact: str = Field(max_length=800)
+    Real finding: 800 was too tight a bound for a genuinely-compliant 3-5
+    sentence Portuguese paragraph — a real run failed the whole
+    website_analysis job on a valid response that landed just over it.
+    1600 keeps this a real safety net against a runaway response without
+    rejecting normal output; the prompt is what actually keeps it short."""
+
+    business_impact: str = Field(max_length=1600)
 
 
 _SYSTEM_PROMPT = """You are a website consultant writing a short, plain-language \
