@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.db import Base, TenantScopedMixin, TimestampMixin, UUIDPkMixin
 from app.modules.opportunities.enums import (
     OpportunityClassification,
+    OpportunityOutcome,
     OpportunityStatus,
     OpportunityType,
 )
@@ -45,3 +46,9 @@ class Opportunity(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     classification: Mapped[OpportunityClassification | None] = mapped_column(
         Enum(OpportunityClassification, name="opportunity_classification"), nullable=True
     )
+    # Nullable = "not tracked yet", never a fabricated default (spec section
+    # 35) — most opportunities never get contacted at all.
+    outcome: Mapped[OpportunityOutcome | None] = mapped_column(
+        Enum(OpportunityOutcome, name="opportunity_outcome"), nullable=True
+    )
+    outcome_notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)

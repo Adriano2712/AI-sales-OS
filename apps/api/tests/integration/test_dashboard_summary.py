@@ -7,7 +7,12 @@ from app.modules.campaigns.enums import CampaignRunStatus, CampaignStatus
 from app.modules.campaigns.models import Campaign, CampaignRun
 from app.modules.companies.enums import CompanyStatus
 from app.modules.companies.models import Company
-from app.modules.opportunities.enums import OpportunityClassification, OpportunityStatus, OpportunityType
+from app.modules.opportunities.enums import (
+    OpportunityClassification,
+    OpportunityOutcome,
+    OpportunityStatus,
+    OpportunityType,
+)
 from app.modules.opportunities.models import Opportunity
 
 from .conftest import requires_live_db, requires_matching_env
@@ -86,6 +91,16 @@ async def test_dashboard_summary_aggregates_only_the_caller_tenants_data(
                     reasons=[],
                     opportunity_score=65.0,
                     classification=OpportunityClassification.REVIEW,
+                    outcome=OpportunityOutcome.WON,
+                ),
+                Opportunity(
+                    tenant_id=tenant_a.id,
+                    company_id=company.id,
+                    type=OpportunityType.AUTOMATION,
+                    status=OpportunityStatus.OPEN,
+                    reasons=[],
+                    opportunity_score=40.0,
+                    outcome=OpportunityOutcome.CONTACTED,
                 ),
             ]
         )
@@ -114,9 +129,12 @@ async def test_dashboard_summary_aggregates_only_the_caller_tenants_data(
         summary_a = response_a.json()
         assert summary_a["discovery"]["companies_found"] == 10
         assert summary_a["discovery"]["companies_validated"] == 8
-        assert summary_a["opportunities"]["total"] == 2
+        assert summary_a["opportunities"]["total"] == 3
         assert summary_a["opportunities"]["high"] == 1
         assert summary_a["opportunities"]["review"] == 1
+        assert summary_a["funnel"]["won"] == 1
+        assert summary_a["funnel"]["contacted"] == 1
+        assert summary_a["funnel"]["replied"] == 0
         assert summary_a["cost"]["ai_calls"] == 1
         assert summary_a["cost"]["total_estimated_cost_usd"] == 0.012
 
@@ -125,4 +143,5 @@ async def test_dashboard_summary_aggregates_only_the_caller_tenants_data(
         summary_b = response_b.json()
         assert summary_b["discovery"]["companies_found"] == 0
         assert summary_b["opportunities"]["total"] == 0
+        assert summary_b["funnel"]["won"] == 0
         assert summary_b["cost"]["ai_calls"] == 0

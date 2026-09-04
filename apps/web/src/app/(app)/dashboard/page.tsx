@@ -129,6 +129,21 @@ export default async function DashboardPage({
         </div>
       )}
 
+      {summary && (
+        <div className={cardClass}>
+          <div className="text-xs text-gray-500">
+            Funil de venda (estágio logado manualmente — sem envio automático, Fase 8)
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-700">
+            <span>Contatadas: {summary.funnel.contacted}</span>
+            <span>Responderam: {summary.funnel.replied}</span>
+            <span>Viraram proposta: {summary.funnel.proposal_sent}</span>
+            <span className="text-green-700">Ganhas: {summary.funnel.won}</span>
+            <span className="text-red-700">Perdidas: {summary.funnel.lost}</span>
+          </div>
+        </div>
+      )}
+
       <div className={cardClass}>
         <form className="flex flex-wrap items-end gap-2" method="get">
           <input

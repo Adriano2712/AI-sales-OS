@@ -9,18 +9,19 @@ from app.modules.dashboard.schemas import (
     CostMetrics,
     DashboardSummary,
     DiscoveryMetrics,
+    FunnelMetrics,
     OpportunityMetrics,
 )
-from app.modules.opportunities.enums import OpportunityClassification
+from app.modules.opportunities.enums import OpportunityClassification, OpportunityOutcome
 from app.modules.opportunities.models import Opportunity
 
 
 async def get_summary(db: AsyncSession, tenant_id: uuid.UUID) -> DashboardSummary:
     """Tenant-wide aggregate (spec section 83). No new data collection — sums
     counters CampaignRun already tracks and rows Opportunity/AICall already
-    store. Sales metrics (approved/contacted/replied/...) are deliberately
-    absent: there's no sales pipeline yet (that's Fase 8+), and showing fixed
-    zeros would be noise, not data (spec section 35)."""
+    store. Funnel counts real Opportunity.outcome values a human has logged
+    (see opportunities/enums.py) — send/reply still isn't automated, so this
+    is only ever as populated as what's actually been tracked by hand."""
     run_totals = (
         await db.execute(
             select(
@@ -50,6 +51,17 @@ async def get_summary(db: AsyncSession, tenant_id: uuid.UUID) -> DashboardSummar
         await db.execute(select(func.count()).where(Opportunity.tenant_id == tenant_id))
     ).scalar_one()
 
+    outcome_rows = (
+        await db.execute(
+            select(Opportunity.outcome, func.count())
+            .where(Opportunity.tenant_id == tenant_id, Opportunity.outcome.is_not(None))
+            .group_by(Opportunity.outcome)
+        )
+    ).all()
+    outcome_counts: dict[OpportunityOutcome, int] = {
+        outcome: count for outcome, count in outcome_rows if outcome
+    }
+
     cost_totals = (
         await db.execute(
             select(func.coalesce(func.sum(AICall.estimated_cost_usd), 0.0), func.count()).where(
@@ -72,6 +84,13 @@ async def get_summary(db: AsyncSession, tenant_id: uuid.UUID) -> DashboardSummar
             good=classification_counts.get(OpportunityClassification.GOOD, 0),
             review=classification_counts.get(OpportunityClassification.REVIEW, 0),
             low=classification_counts.get(OpportunityClassification.LOW, 0),
+        ),
+        funnel=FunnelMetrics(
+            contacted=outcome_counts.get(OpportunityOutcome.CONTACTED, 0),
+            replied=outcome_counts.get(OpportunityOutcome.REPLIED, 0),
+            proposal_sent=outcome_counts.get(OpportunityOutcome.PROPOSAL_SENT, 0),
+            won=outcome_counts.get(OpportunityOutcome.WON, 0),
+            lost=outcome_counts.get(OpportunityOutcome.LOST, 0),
         ),
         cost=CostMetrics(
             total_estimated_cost_usd=round(float(cost_totals[0]), 4),

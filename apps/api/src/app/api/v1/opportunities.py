@@ -14,7 +14,7 @@ from app.modules.opportunities.scoring import derive_next_action
 from app.modules.opportunities.service import (
     get_opportunity,
     list_opportunities,
-    update_opportunity_status,
+    update_opportunity,
 )
 from app.modules.tenancy.dependencies import get_tenant_context, get_tenant_db, require_write_access
 from app.modules.tenancy.schemas import TenantContext
@@ -86,19 +86,24 @@ async def update_opportunity_endpoint(
     context: TenantContext = Depends(require_write_access()),
     db: AsyncSession = Depends(get_tenant_db),
 ) -> OpportunityRead:
-    """Status-only, same shape as PATCH /companies/{id} — a human moving an
-    opportunity through OPEN -> REVIEWING -> APPROVED/REJECTED/ARCHIVED
-    (spec section 47's human-approval gate, minus the message-generation
-    step which is Fase 8)."""
+    """Same shape as PATCH /companies/{id} — every field optional and
+    independent. `status` is a human moving an opportunity through
+    OPEN -> REVIEWING -> APPROVED/REJECTED/ARCHIVED (spec section 47's
+    human-approval gate). `outcome`/`outcome_notes` are a separate axis: real
+    sales-pipeline progress (CONTACTED -> REPLIED -> PROPOSAL_SENT ->
+    WON/LOST) logged by a human as it happens outside the system, since
+    there's still no real send/reply integration (Fase 8)."""
     opportunity = await get_opportunity(db, context.tenant_id, opportunity_id)
     if opportunity is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opportunity not found")
-    opportunity = await update_opportunity_status(db, opportunity, data.status)
-    await log_event(
-        db,
-        context.tenant_id,
-        AuditEventType.OPPORTUNITY_UPDATED,
-        {"opportunity_id": str(opportunity.id), "status": data.status.value},
+    opportunity = await update_opportunity(
+        db, opportunity, data.status, data.outcome, data.outcome_notes
     )
+    payload: dict = {"opportunity_id": str(opportunity.id)}
+    if data.status is not None:
+        payload["status"] = data.status.value
+    if data.outcome is not None:
+        payload["outcome"] = data.outcome.value
+    await log_event(db, context.tenant_id, AuditEventType.OPPORTUNITY_UPDATED, payload)
     await db.commit()
     return OpportunityRead.model_validate(opportunity)

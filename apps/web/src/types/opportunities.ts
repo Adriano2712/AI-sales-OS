@@ -11,6 +11,8 @@ export type OpportunityStatus = "OPEN" | "REVIEWING" | "APPROVED" | "REJECTED" |
 
 export type OpportunityClassification = "HIGH" | "GOOD" | "REVIEW" | "LOW";
 
+export type OpportunityOutcome = "CONTACTED" | "REPLIED" | "PROPOSAL_SENT" | "WON" | "LOST";
+
 export interface Opportunity {
   id: string;
   company_id: string;
@@ -26,6 +28,8 @@ export interface Opportunity {
   opportunity_score: number | null;
   confidence: number | null;
   classification: OpportunityClassification | null;
+  outcome: OpportunityOutcome | null;
+  outcome_notes: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -55,6 +59,13 @@ export interface DashboardSummary {
     good: number;
     review: number;
     low: number;
+  };
+  funnel: {
+    contacted: number;
+    replied: number;
+    proposal_sent: number;
+    won: number;
+    lost: number;
   };
   cost: {
     total_estimated_cost_usd: number;

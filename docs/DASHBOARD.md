@@ -37,12 +37,13 @@ wrote:
   `companies_validated`, `duplicates`, `enriched`, `analyzed`) across every
   campaign run for the tenant.
 - **Opportunity**: total count + count by `classification`.
+- **Funnel** (post-Fase-8): count by `Opportunity.outcome`
+  (`CONTACTED`/`REPLIED`/`PROPOSAL_SENT`/`WON`/`LOST`) — see
+  docs/OPPORTUNITIES.md. Only ever as populated as what's actually been
+  logged by hand (no send/reply integration exists), so an all-zero funnel
+  honestly means "nothing tracked yet," not a bug.
 - **Cost**: real sum of `ai_calls.estimated_cost_usd` (not an estimate —
   logged per-call since Fase 0).
-
-**Sales metrics (approved/contacted/replied/...) are deliberately absent.**
-There's no sales pipeline yet (Fase 8+) — showing fixed zeros would be noise
-dressed up as data, which is exactly what spec section 35 says not to do.
 
 ## Real finding
 

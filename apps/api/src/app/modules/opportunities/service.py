@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.business_analysis.models import BusinessAnalysis
 from app.modules.companies.models import Company
-from app.modules.opportunities.enums import OpportunityStatus, OpportunityType
+from app.modules.opportunities.enums import OpportunityOutcome, OpportunityStatus, OpportunityType
 from app.modules.opportunities.models import Opportunity
 from app.modules.opportunities.scoring import (
     classify_opportunity,
@@ -134,9 +134,21 @@ async def get_opportunity(
     return result.scalar_one_or_none()
 
 
-async def update_opportunity_status(
-    db: AsyncSession, opportunity: Opportunity, status: OpportunityStatus
+async def update_opportunity(
+    db: AsyncSession,
+    opportunity: Opportunity,
+    status: OpportunityStatus | None = None,
+    outcome: OpportunityOutcome | None = None,
+    outcome_notes: str | None = None,
 ) -> Opportunity:
-    opportunity.status = status
+    """No transition-rule enforcement on either field (same reasoning as
+    companies/service.py's update_company) — both are human corrections
+    reflecting real-world state, not pipeline-driven transitions."""
+    if status is not None:
+        opportunity.status = status
+    if outcome is not None:
+        opportunity.outcome = outcome
+    if outcome_notes is not None:
+        opportunity.outcome_notes = outcome_notes
     await db.flush()
     return opportunity

@@ -75,6 +75,21 @@ thousands).
 `GET /api/v1/opportunities/{id}` / `PATCH /api/v1/opportunities/{id}` —
 detail + status update.
 
+## Sales-pipeline outcome (`outcome` / `outcome_notes`, post-Fase-8)
+
+Separate axis from `status` — `status` is "is this opportunity still worth
+working" (a human's internal triage), `outcome` is "how far did the real
+deal get" (`CONTACTED -> REPLIED -> PROPOSAL_SENT -> WON/LOST`), logged by
+hand as it happens outside the system, same as `Message.response` — there's
+still no real send/reply integration (Fase 8). No transition rules enforced
+(same reasoning as `Company.status`/`do_not_contact`): any value is
+reachable from any other, since this reflects reality a human corrects, not
+a system-driven workflow. `PATCH /api/v1/opportunities/{id}` accepts
+`outcome`/`outcome_notes` independently of `status` — updating one never
+touches the other. Exists specifically to validate the pipeline end to end
+(does a HIGH/GOOD-classified opportunity actually convert more than a LOW
+one?) before investing further in scaling discovery volume.
+
 ## Out of scope this phase
 
 `Suggested Offer` / `Suggested Message` (spec section 45) are explicitly

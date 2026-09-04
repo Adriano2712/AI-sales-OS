@@ -3,7 +3,12 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.modules.opportunities.enums import OpportunityClassification, OpportunityStatus, OpportunityType
+from app.modules.opportunities.enums import (
+    OpportunityClassification,
+    OpportunityOutcome,
+    OpportunityStatus,
+    OpportunityType,
+)
 
 
 class OpportunityRead(BaseModel):
@@ -23,12 +28,19 @@ class OpportunityRead(BaseModel):
     opportunity_score: float | None
     confidence: float | None
     classification: OpportunityClassification | None
+    outcome: OpportunityOutcome | None
+    outcome_notes: str | None
     created_at: datetime
     updated_at: datetime
 
 
 class OpportunityUpdate(BaseModel):
-    status: OpportunityStatus
+    status: OpportunityStatus | None = None
+    # Both optional and independent of `status` — a human logs sales-pipeline
+    # progress (spec: this is real-world reality, not a system-driven state)
+    # separately from deciding whether the opportunity is still worth working.
+    outcome: OpportunityOutcome | None = None
+    outcome_notes: str | None = None
 
 
 class OpportunityDetailRead(OpportunityRead):

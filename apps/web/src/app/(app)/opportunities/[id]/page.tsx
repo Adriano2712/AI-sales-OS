@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import {
   generateMessageAction,
   updateMessageAction,
+  updateOpportunityOutcomeAction,
   updateOpportunityStatusAction,
 } from "@/app/(app)/opportunities/actions";
 import { PhoneLink, WebsiteLink } from "@/components/ContactInfo";
@@ -11,7 +12,12 @@ import { apiFetch } from "@/lib/api";
 import { requireUser } from "@/lib/requireUser";
 import { badgeClass, buttonVariants, cardClass, inputClass, type BadgeVariant } from "@/lib/ui";
 import type { Message, MessageChannel } from "@/types/messages";
-import type { OpportunityClassification, OpportunityDetail, OpportunityStatus } from "@/types/opportunities";
+import type {
+  OpportunityClassification,
+  OpportunityDetail,
+  OpportunityOutcome,
+  OpportunityStatus,
+} from "@/types/opportunities";
 
 const STATUS_OPTIONS: OpportunityStatus[] = [
   "OPEN",
@@ -21,6 +27,14 @@ const STATUS_OPTIONS: OpportunityStatus[] = [
   "ARCHIVED",
 ];
 
+const OUTCOME_OPTIONS: OpportunityOutcome[] = [
+  "CONTACTED",
+  "REPLIED",
+  "PROPOSAL_SENT",
+  "WON",
+  "LOST",
+];
+
 const CHANNEL_OPTIONS: MessageChannel[] = ["WHATSAPP", "EMAIL", "LINKEDIN", "PHONE", "OTHER"];
 
 const CLASSIFICATION_VARIANT: Record<OpportunityClassification, BadgeVariant> = {
@@ -28,6 +42,14 @@ const CLASSIFICATION_VARIANT: Record<OpportunityClassification, BadgeVariant> = 
   GOOD: "info",
   REVIEW: "warning",
   LOW: "neutral",
+};
+
+const OUTCOME_VARIANT: Record<OpportunityOutcome, BadgeVariant> = {
+  CONTACTED: "neutral",
+  REPLIED: "info",
+  PROPOSAL_SENT: "warning",
+  WON: "success",
+  LOST: "danger",
 };
 
 const MESSAGE_STATUS_VARIANT: Record<Message["status"], BadgeVariant> = {
@@ -166,6 +188,52 @@ export default async function OpportunityDetailPage({
           <button type="submit" className={buttonVariants.secondary}>
             Atualizar status
           </button>
+        </form>
+      </div>
+
+      <div>
+        <h2 className="text-sm font-semibold text-gray-900">Estágio de venda</h2>
+        <p className="mt-1 text-xs text-gray-400">
+          Sem envio automático (Fase 8) — atualize aqui conforme o que acontece de verdade fora do
+          sistema (você mandou, ela respondeu, virou proposta, fechou ou não).
+        </p>
+        {opportunity.outcome && (
+          <span className={`mt-2 inline-block ${badgeClass(OUTCOME_VARIANT[opportunity.outcome])}`}>
+            {opportunity.outcome}
+          </span>
+        )}
+        <form
+          action={async (formData: FormData) => {
+            "use server";
+            const outcome = formData.get("outcome") as OpportunityOutcome;
+            const notes = (formData.get("outcome_notes") as string) ?? "";
+            await updateOpportunityOutcomeAction(opportunity.id, outcome, notes);
+          }}
+          className="mt-2 space-y-2"
+        >
+          <div className="flex items-center gap-2">
+            <select
+              name="outcome"
+              defaultValue={opportunity.outcome ?? "CONTACTED"}
+              className={`${inputClass} w-auto`}
+            >
+              {OUTCOME_OPTIONS.map((outcome) => (
+                <option key={outcome} value={outcome}>
+                  {outcome}
+                </option>
+              ))}
+            </select>
+            <button type="submit" className={buttonVariants.secondary}>
+              Atualizar estágio
+            </button>
+          </div>
+          <textarea
+            name="outcome_notes"
+            defaultValue={opportunity.outcome_notes ?? ""}
+            placeholder="Anotação livre (o que ela respondeu, valor da proposta, motivo de perda...)"
+            rows={2}
+            className={inputClass}
+          />
         </form>
       </div>
 
