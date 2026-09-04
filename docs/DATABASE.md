@@ -97,6 +97,9 @@ UNIQUE(tenant_id, company_id, type)
 # Fase 8
 messages(id, tenant_id, opportunity_id, channel, status, generated_text, sent_at, response, created_at, updated_at)
 companies.do_not_contact  -- column added to Fase 2's companies table
+
+# Post-Fase-8 (daily digest)
+companies.campaign_run_id  -- FK to campaign_runs, nullable, set only at creation (see docs/DAILY_DIGEST.md)
 ```
 
 Remaining product entities (`opportunities`, ...) are added in

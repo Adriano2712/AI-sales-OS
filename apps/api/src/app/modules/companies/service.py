@@ -218,7 +218,10 @@ def merge_missing_fields(company: Company, raw: NormalizedRawCompany) -> list[st
 
 
 async def upsert_company_from_raw(
-    db: AsyncSession, tenant_id: uuid.UUID, raw: NormalizedRawCompany
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    raw: NormalizedRawCompany,
+    campaign_run_id: uuid.UUID | None = None,
 ) -> tuple[Company, MatchConfidence]:
     """The core Discovery -> Company step. Returns the resulting company and
     the confidence that led to it (HIGH -> merged into an existing company;
@@ -261,6 +264,7 @@ async def upsert_company_from_raw(
         # observed signal (Apify), not an inference (spec section 15/35).
         status=CompanyStatus.INVALID if raw.permanently_closed else CompanyStatus.DISCOVERED,
         needs_review=(best_confidence == MatchConfidence.MEDIUM),
+        campaign_run_id=campaign_run_id,
     )
     db.add(company)
     await db.flush()

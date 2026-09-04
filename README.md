@@ -25,7 +25,7 @@ Justificativas em [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ```
 apps/web        Next.js (frontend)
 apps/api        FastAPI + domínio (modular monolith)
-workers/        Processo RQ (importa handlers de apps/api)
+workers/        Processo RQ (importa handlers de apps/api) + scheduler.py (opcional, descoberta diária)
 database/       Migrations (Alembic) + seeds de dev
 docs/           Documentação
 ```
@@ -46,6 +46,7 @@ Ver [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 - [OPPORTUNITIES.md](docs/OPPORTUNITIES.md) — Opportunity Engine
 - [DASHBOARD.md](docs/DASHBOARD.md) — Dashboard + métricas
 - [MESSAGES.md](docs/MESSAGES.md) — SDR Assistido / Message Generation
+- [DAILY_DIGEST.md](docs/DAILY_DIGEST.md) — Descoberta diária (Brasil inteiro) + resumo por email
 - [SECURITY.md](docs/SECURITY.md) — secrets, authN/authZ, LGPD
 
 ## Fases

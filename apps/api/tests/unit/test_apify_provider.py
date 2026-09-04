@@ -1,3 +1,4 @@
+from app.modules.discovery.base import NATIONWIDE_CITY_SENTINEL
 from app.modules.discovery.providers.apify import ApifyProvider
 
 # Real fields, verified against a live run against this project's own Apify
@@ -56,3 +57,30 @@ def test_to_raw_company_flags_permanently_closed():
     item = {**_REAL_ITEM_SAMPLE, "permanentlyClosed": True}
     result = ApifyProvider._to_raw_company(item, "restaurants", "Sorocaba", "SP", "BR")
     assert result.permanently_closed is True
+
+
+def test_to_raw_company_prefers_real_place_city_over_campaign_city():
+    """Needed for nationwide search (every result would otherwise be
+    stamped city="BRASIL"), and more accurate generally — a search near a
+    city boundary can legitimately return a neighboring city's business."""
+    result = ApifyProvider._to_raw_company(
+        _REAL_ITEM_SAMPLE, "restaurants", NATIONWIDE_CITY_SENTINEL, "BR", "BR"
+    )
+    assert result.city == "Sorocaba"
+    assert result.state == "SP"
+
+
+def test_to_raw_company_falls_back_to_campaign_city_when_item_lacks_one():
+    item = {**_REAL_ITEM_SAMPLE, "city": None, "state": None}
+    result = ApifyProvider._to_raw_company(item, "restaurants", "Votorantim", "SP", "BR")
+    assert result.city == "Votorantim"
+    assert result.state == "SP"
+
+
+def test_build_location_query_city_scoped():
+    assert ApifyProvider._build_location_query("Sorocaba", "BR") == "Sorocaba, Brazil"
+    assert ApifyProvider._build_location_query("Lisboa", "PT") == "Lisboa, PT"
+
+
+def test_build_location_query_nationwide_sentinel():
+    assert ApifyProvider._build_location_query(NATIONWIDE_CITY_SENTINEL, "BR") == "Brazil"

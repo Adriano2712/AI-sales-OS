@@ -1,7 +1,7 @@
 import httpx
 
 from app.modules.companies.service import NormalizedRawCompany
-from app.modules.discovery.base import DiscoveryProvider, DiscoveryProviderError
+from app.modules.discovery.base import NATIONWIDE_CITY_SENTINEL, DiscoveryProvider, DiscoveryProviderError
 from app.modules.discovery.segment_mapping import SEGMENT_TO_APIFY_SEARCH_TERM
 
 _APIFY_API_URL = "https://api.apify.com/v2"
@@ -44,10 +44,7 @@ class ApifyProvider(DiscoveryProvider):
                 "app.modules.discovery.segment_mapping.SEGMENT_TO_APIFY_SEARCH_TERM"
             )
 
-        # The actor's own docs recommend simple "City, Country" over
-        # "City, State, Country" for more reliable area matching — verified
-        # against the real input schema, not assumed.
-        location_query = f"{city}, Brazil" if country == "BR" else f"{city}, {country}"
+        location_query = self._build_location_query(city, country)
 
         run_input = {
             "searchStringsArray": [search_term],
@@ -86,16 +83,35 @@ class ApifyProvider(DiscoveryProvider):
         return results[:limit]
 
     @staticmethod
+    def _build_location_query(city: str, country: str) -> str:
+        # The actor's own docs recommend simple "City, Country" over
+        # "City, State, Country" for more reliable area matching — verified
+        # against the real input schema, not assumed. The nationwide sentinel
+        # is the one case where the actor's docs say to pass the country
+        # alone ("you can just set the whole country... it intelligently
+        # splits it into subregions internally").
+        if city == NATIONWIDE_CITY_SENTINEL:
+            return "Brazil" if country == "BR" else country
+        return f"{city}, Brazil" if country == "BR" else f"{city}, {country}"
+
+    @staticmethod
     def _to_raw_company(
         item: dict, segment: str, city: str, state: str, country: str
     ) -> NormalizedRawCompany:
+        # Prefer the real per-place city/state Apify already returns over
+        # the campaign's nominal target — necessary for the nationwide
+        # sentinel (every result would otherwise be stamped city="BRASIL"),
+        # and more accurate generally: a search near a city boundary can
+        # legitimately return a neighboring city's business.
+        real_city = item.get("city") or city
+        real_state = item.get("state") or state
         return NormalizedRawCompany(
             provider="apify",
             external_id=item.get("placeId"),
             name=item["title"],
             segment=segment,
-            city=city,
-            state=state,
+            city=real_city,
+            state=real_state,
             country=country,
             address=item.get("street") or item.get("address"),
             phone=item.get("phoneUnformatted") or item.get("phone"),

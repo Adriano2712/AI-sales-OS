@@ -151,7 +151,9 @@ async def _run(job_id: str, tenant_id: str, campaign_run_id: str) -> None:
             for raw in raw_companies:
                 try:
                     await set_tenant_context(db, tenant_uuid)
-                    company, confidence = await upsert_company_from_raw(db, tenant_uuid, raw)
+                    company, confidence = await upsert_company_from_raw(
+                        db, tenant_uuid, raw, campaign_run_id=run_uuid
+                    )
                     validated += 1
                     if confidence == MatchConfidence.HIGH:
                         duplicates += 1

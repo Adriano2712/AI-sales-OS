@@ -1,7 +1,9 @@
 import uuid
 
+from app.core.config import get_settings
 from app.core.db import async_session_factory, set_tenant_context
 from app.core.logging import get_logger
+from app.modules.ai_gateway.anthropic_provider import AnthropicProvider
 from app.modules.companies.models import Company
 from app.modules.jobs.async_entrypoint import run_job_sync
 from app.modules.jobs.enums import JobType
@@ -17,6 +19,15 @@ async def _run(job_id: str, tenant_id: str, company_id: str) -> None:
     tenant_uuid = uuid.UUID(tenant_id)
     job_uuid = uuid.UUID(job_id)
     company_uuid = uuid.UUID(company_id)
+
+    # Unlike business_analysis, a missing key here degrades gracefully
+    # instead of aborting the job — the deterministic score/problems are the
+    # core feature and must never depend on AI being configured; only the
+    # extra AI paragraph is skipped.
+    settings = get_settings()
+    ai_provider = (
+        AnthropicProvider(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
+    )
 
     async with async_session_factory() as db:
         await set_tenant_context(db, tenant_uuid)
@@ -35,7 +46,7 @@ async def _run(job_id: str, tenant_id: str, company_id: str) -> None:
 
         try:
             await set_tenant_context(db, tenant_uuid)
-            analysis = await analyze_website(db, tenant_uuid, company)
+            analysis = await analyze_website(db, tenant_uuid, company, ai_provider=ai_provider)
             await db.commit()
 
             await set_tenant_context(db, tenant_uuid)

@@ -52,7 +52,12 @@ export interface WebsiteAnalysis {
   score_conversao: number | null;
   score_conteudo: number | null;
   score_design: number | null;
-  findings: Record<string, unknown>;
+  findings: {
+    pages_crawled?: number;
+    pages?: { url: string; type: string; status: number | null }[];
+    problems?: string[];
+    ai_diagnostic?: string | null;
+  };
   analyzed_at: string;
 }
 

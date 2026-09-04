@@ -3,6 +3,24 @@ from dataclasses import dataclass
 from app.modules.website_analysis.enums import PageType
 from app.modules.website_analysis.signal_extraction import PageSignals
 
+# Order mirrors the priority a business owner would care about, not a score
+# weight — the digest and company-detail page just render this list top to
+# bottom.
+_VIEWPORT_PROBLEM = (
+    "Site não é otimizado para celular (sem meta viewport) — a maioria dos "
+    "visitantes acessa pelo celular."
+)
+_NO_CONTACT_PROBLEM = (
+    "Nenhuma forma direta de contato encontrada no site (sem formulário, "
+    "telefone clicável, e-mail ou WhatsApp)."
+)
+_NO_NAV_PROBLEM = "Página inicial sem menu de navegação — dificulta encontrar informação."
+_NO_SERVICES_PAGE_PROBLEM = "Nenhuma página de serviços/produtos encontrada."
+_MISSING_TITLE_OR_DESCRIPTION_PROBLEM = (
+    "Título ou descrição da página ausentes — prejudica o posicionamento no Google (SEO)."
+)
+_THIN_CONTENT_PROBLEM = "Conteúdo da página inicial muito raso (poucas palavras)."
+
 # Spec section 32.
 WEIGHTS: dict[str, float] = {
     "funcionamento": 0.20,
@@ -93,3 +111,50 @@ def compute_digital_score(sub_scores: SubScores) -> float | None:
     total_weight = sum(weight for _, weight in evaluated)
     weighted_sum = sum(score * weight for score, weight in evaluated)
     return round(weighted_sum / total_weight, 1)
+
+
+def derive_problems(pages: list[PageSignals]) -> list[str]:
+    """Concrete, human-readable diagnostics drawn directly from observed page
+    signals — same evaluability discipline as compute_sub_scores (spec
+    section 35): never states a problem for something that wasn't actually
+    observed. If the homepage didn't load, that's the only problem reported —
+    nothing else was meaningfully fetched, so nothing else is asserted."""
+    if not pages:
+        return ["Site não pôde ser acessado (nenhuma página respondeu)."]
+
+    homepage = next((p for p in pages if p.page_type == PageType.HOMEPAGE), pages[0])
+    homepage_ok = homepage.http_status is not None and homepage.http_status < 400
+
+    if not homepage_ok:
+        if homepage.http_status:
+            return [
+                f"Site fora do ar ou com erro (HTTP {homepage.http_status}) — "
+                "quem tenta visitar não consegue."
+            ]
+        return ["Site fora do ar ou inacessível — quem tenta visitar não consegue."]
+
+    problems: list[str] = []
+
+    if not homepage.has_viewport_meta:
+        problems.append(_VIEWPORT_PROBLEM)
+
+    has_any_contact_method = any(
+        p.has_contact_form or p.has_phone_link or p.has_email_link or p.has_whatsapp_link
+        for p in pages
+    ) or any(p.page_type == PageType.CONTACT for p in pages)
+    if not has_any_contact_method:
+        problems.append(_NO_CONTACT_PROBLEM)
+
+    if not homepage.has_nav:
+        problems.append(_NO_NAV_PROBLEM)
+
+    if not any(p.page_type == PageType.SERVICES for p in pages):
+        problems.append(_NO_SERVICES_PAGE_PROBLEM)
+
+    if not homepage.title or not homepage.meta_description:
+        problems.append(_MISSING_TITLE_OR_DESCRIPTION_PROBLEM)
+
+    if homepage.word_count < 100:
+        problems.append(_THIN_CONTENT_PROBLEM)
+
+    return problems

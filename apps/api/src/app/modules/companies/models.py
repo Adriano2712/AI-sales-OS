@@ -35,6 +35,16 @@ class Company(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     # so there's no distinct "contact" entity to attach this to yet. Checked
     # by messages/service.py before generating or sending any message.
     do_not_contact: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Which run first discovered this company — nullable (a company created
+    # outside a campaign run has none). Only ever set at creation, never on a
+    # later merge (see companies/service.py:upsert_company_from_raw), so it
+    # means "first discovered by", not "most recently touched by" — that's
+    # what lets the daily digest (workers/scheduler.py) report exactly the
+    # companies a given run actually introduced, without re-reporting one a
+    # later run merely re-matched as a duplicate.
+    campaign_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("campaign_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
 
 class CompanySource(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):

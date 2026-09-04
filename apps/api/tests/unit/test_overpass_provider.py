@@ -1,3 +1,6 @@
+import pytest
+
+from app.modules.discovery.base import NATIONWIDE_CITY_SENTINEL, DiscoveryProviderError
 from app.modules.discovery.providers.overpass import OverpassProvider, _first_present
 
 
@@ -43,3 +46,14 @@ def test_to_raw_company_leaves_phone_and_website_none_when_absent():
     result = OverpassProvider._to_raw_company(element, "restaurants", "Sorocaba", "SP", "BR")
     assert result.phone is None
     assert result.website is None
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_nationwide_sentinel():
+    """Overpass has no equivalent to Apify's whole-country search — a
+    country-wide query against the shared free instance is a real overload
+    risk (it already rate-limits at 3 back-to-back cities). Must fail
+    cleanly, not attempt the query."""
+    provider = OverpassProvider()
+    with pytest.raises(DiscoveryProviderError):
+        await provider.search("restaurants", NATIONWIDE_CITY_SENTINEL, "BR", "BR", 5)

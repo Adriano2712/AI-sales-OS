@@ -1,7 +1,7 @@
 import httpx
 
 from app.modules.companies.service import NormalizedRawCompany
-from app.modules.discovery.base import DiscoveryProvider, DiscoveryProviderError
+from app.modules.discovery.base import NATIONWIDE_CITY_SENTINEL, DiscoveryProvider, DiscoveryProviderError
 from app.modules.discovery.segment_mapping import SEGMENT_TO_OSM_TAGS
 
 OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
@@ -29,6 +29,19 @@ class OverpassProvider(DiscoveryProvider):
     async def search(
         self, segment: str, city: str, state: str, country: str, limit: int
     ) -> list[NormalizedRawCompany]:
+        if city == NATIONWIDE_CITY_SENTINEL:
+            # A country-wide Overpass query against the shared free instance
+            # would be a real overload risk (it already rate-limits at 3
+            # cities back-to-back — see docs/DISCOVERY.md) — reject cleanly
+            # rather than attempt it. Apify's own location search handles
+            # whole-country natively; the job handler's existing
+            # one-provider-fails-the-other-continues fallback means this
+            # doesn't block the run.
+            raise DiscoveryProviderError(
+                "Overpass does not support nationwide search — use Apify for "
+                f"city='{NATIONWIDE_CITY_SENTINEL}' campaigns (see docs/DISCOVERY.md)"
+            )
+
         tags = SEGMENT_TO_OSM_TAGS.get(segment)
         if not tags:
             raise DiscoveryProviderError(

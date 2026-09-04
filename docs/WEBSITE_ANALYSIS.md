@@ -59,6 +59,30 @@ per the anti-hallucination rule. This was an explicit, approved trade-off
 (Fase 4 planning) — a real design score would need a rendering/screenshot
 capability, out of scope for now.
 
+## Diagnóstico concreto (`scoring.derive_problems`)
+
+Além dos 6 sub-scores, `derive_problems(pages) -> list[str]` traduz os
+mesmos sinais já coletados em problemas em português, defensáveis um a um
+("Site não é otimizado para celular", "Nenhuma forma direta de contato",
+"Site fora do ar (HTTP 500)", ...). Mesma disciplina anti-alucinação: se a
+homepage não carregou, só esse problema é reportado — nada mais foi
+avaliado de verdade. Salvo em `website_analyses.findings["problems"]`,
+exposto pela API (`findings` já é um `dict` genérico, sem mudança de
+schema) e renderizado na página de detalhe da empresa.
+
+## Parágrafo de impacto (IA, opcional — `ai_diagnostic.py`)
+
+Quando `ANTHROPIC_API_KEY` está configurada **e** a homepage carregou
+(`digital_score` avaliável), uma chamada adicional de IA (`claude-sonnet-5`,
+mesmo modelo do AI Analyst do Fase 5) transforma a lista de problemas num
+parágrafo curto de impacto de negócio, em português, salvo em
+`findings["ai_diagnostic"]`. Controle de custo explícito (decisão do
+usuário): **não é chamada quando o site está fora do ar** — o problema já é
+autoexplicativo, uma explicação de IA não agregaria sinal, só custo. Sem
+chave configurada, o recurso é pulado silenciosamente — o score e os
+problemas determinísticos continuam funcionando normalmente (nunca
+dependem de IA).
+
 ## Real findings
 
 - **Crawler validated against a real, live third-party site** (not just

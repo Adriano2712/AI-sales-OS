@@ -555,3 +555,52 @@ async def test_apify_permanently_closed_place_is_discovered_as_invalid(
     await _run_multi_provider_test(
         app_session_factory, monkeypatch, "Permanently Closed Tenant", osm, apify, check
     )
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_new_companies_are_stamped_with_the_run_that_discovered_them(
+    app_session_factory, monkeypatch
+):
+    """Needed for the daily digest (workers/scheduler.py) to know exactly
+    which companies a given run introduced — set once at creation, never on
+    a later merge, so a re-match doesn't get re-reported as new."""
+    import app.modules.jobs.handlers.discovery as discovery_handler
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from .conftest import ADMIN_DATABASE_URL
+
+    tenant_id = uuid.uuid4()
+    admin_engine = create_async_engine(ADMIN_DATABASE_URL)
+    admin_factory = async_sessionmaker(admin_engine, expire_on_commit=False, class_=AsyncSession)
+
+    from app.modules.tenancy.models import Tenant
+
+    async with admin_factory() as admin_db:
+        tenant = Tenant(id=tenant_id, name=f"Run Stamp Tenant {uuid.uuid4().hex[:6]}")
+        admin_db.add(tenant)
+        await admin_db.commit()
+
+    try:
+        campaign_id, run_id, job_id = await _seed_campaign_run(
+            app_session_factory, tenant_id, ["Sorocaba"], target_quantity=1
+        )
+        monkeypatch.setattr(
+            discovery_handler,
+            "OverpassProvider",
+            lambda: _FakeProvider({"Sorocaba": [_raw("Restaurante A", "node/1")]}),
+        )
+        await discovery_handler._run(str(job_id), str(tenant_id), str(run_id))
+
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            result = await session.execute(select(Company).where(Company.tenant_id == tenant_id))
+            [company] = result.scalars().all()
+            assert company.campaign_run_id == run_id
+    finally:
+        async with admin_factory() as admin_db:
+            tenant = await admin_db.get(Tenant, tenant_id)
+            if tenant is not None:
+                await admin_db.delete(tenant)
+                await admin_db.commit()
+        await admin_engine.dispose()

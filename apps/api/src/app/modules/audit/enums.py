@@ -17,3 +17,5 @@ class AuditEventType(str, enum.Enum):
     CONTACTED = "contacted"
     RESPONSE_RECEIVED = "response_received"
     FEEDBACK_ADDED = "feedback_added"
+    DAILY_DIGEST_SENT = "daily_digest_sent"
+    DAILY_SITE_DIAGNOSTIC_SENT = "daily_site_diagnostic_sent"

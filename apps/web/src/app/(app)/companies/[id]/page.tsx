@@ -94,6 +94,26 @@ export default async function CompanyDetailPage({
                   </div>
                 ))}
               </dl>
+              {(company.website_analysis.findings.problems?.length ?? 0) > 0 && (
+                <div className="mt-3">
+                  <h3 className="text-xs font-semibold text-gray-700">Problemas encontrados</h3>
+                  <ul className="mt-1 list-disc space-y-1 pl-4 text-sm text-gray-800">
+                    {company.website_analysis.findings.problems!.map((problem, i) => (
+                      <li key={i}>{problem}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {company.website_analysis.findings.ai_diagnostic && (
+                <div className="mt-3">
+                  <h3 className="text-xs font-semibold text-gray-700">Impacto no negócio</h3>
+                  <p className="mt-1 text-sm text-gray-800">
+                    {company.website_analysis.findings.ai_diagnostic}
+                  </p>
+                </div>
+              )}
+
               <p className="mt-2 text-xs text-gray-400">
                 Analisado em{" "}
                 {new Date(company.website_analysis.analyzed_at).toLocaleString("pt-BR")}. Uma

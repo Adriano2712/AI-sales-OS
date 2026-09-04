@@ -1,13 +1,22 @@
 import uuid
 from datetime import UTC, datetime
+from typing import cast
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.ai_gateway.base import AIProvider
+from app.modules.ai_gateway.service import run_ai_task
 from app.modules.companies.models import Company
+from app.modules.website_analysis.ai_diagnostic import SiteDiagnosticAIOutput
+from app.modules.website_analysis.ai_diagnostic import build_ai_request as build_diagnostic_request
 from app.modules.website_analysis.crawler import WebsiteCrawler
 from app.modules.website_analysis.models import Website, WebsiteAnalysis, WebsitePage
-from app.modules.website_analysis.scoring import compute_digital_score, compute_sub_scores
+from app.modules.website_analysis.scoring import (
+    compute_digital_score,
+    compute_sub_scores,
+    derive_problems,
+)
 
 
 async def get_or_create_website(
@@ -33,6 +42,7 @@ async def analyze_website(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     company: Company,
+    ai_provider: AIProvider | None = None,
     crawler: WebsiteCrawler | None = None,
 ) -> WebsiteAnalysis:
     website = await get_or_create_website(db, tenant_id, company)
@@ -70,6 +80,24 @@ async def analyze_website(
 
     sub_scores = compute_sub_scores(pages)
     digital_score = compute_digital_score(sub_scores)
+    problems = derive_problems(pages)
+
+    ai_diagnostic: str | None = None
+    # Cost control (spec section 39): only spend on a paragraph when the
+    # homepage actually loaded — a fully down site is already self-
+    # explanatory (see derive_problems), an AI paragraph would add cost
+    # without adding signal.
+    if ai_provider is not None and digital_score is not None:
+        ai_request = build_diagnostic_request(
+            company_name=company.name,
+            segment=company.segment,
+            digital_score=digital_score,
+            problems=problems,
+        )
+        ai_response = await run_ai_task(db, ai_provider, tenant_id, ai_request)
+        # Safe narrowing: we set output_schema=SiteDiagnosticAIOutput above,
+        # and the provider validates against exactly that schema.
+        ai_diagnostic = cast(SiteDiagnosticAIOutput, ai_response.output).business_impact
 
     analysis = WebsiteAnalysis(
         tenant_id=tenant_id,
@@ -84,6 +112,8 @@ async def analyze_website(
         findings={
             "pages_crawled": len(pages),
             "pages": [{"url": p.url, "type": p.page_type.value, "status": p.http_status} for p in pages],
+            "problems": problems,
+            "ai_diagnostic": ai_diagnostic,
         },
         analyzed_at=now,
     )

@@ -31,6 +31,17 @@ class Settings(BaseSettings):
     """Actor id in `username/actor-name` form. Verified against the real
     Apify API before use — see docs/DISCOVERY.md."""
 
+    gmail_smtp_user: str | None = None
+    gmail_smtp_app_password: str | None = None
+    daily_digest_recipient_email: str | None = None
+    """Daily digest email (workers/scheduler.py). All three optional —
+    unset means the scheduler logs and skips sending, same
+    degrade-gracefully pattern as apify_api_token."""
+
+    daily_discovery_tenant_id: str | None = None
+    """Which tenant the daily scheduled campaign runs for. Unset means the
+    scheduler does nothing — there's no sane default tenant to guess."""
+
     cors_origins: list[str] = ["http://localhost:3000"]
 
 

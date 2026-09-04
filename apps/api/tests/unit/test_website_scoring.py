@@ -1,5 +1,9 @@
 from app.modules.website_analysis.enums import PageType
-from app.modules.website_analysis.scoring import compute_digital_score, compute_sub_scores
+from app.modules.website_analysis.scoring import (
+    compute_digital_score,
+    compute_sub_scores,
+    derive_problems,
+)
 from app.modules.website_analysis.signal_extraction import PageSignals
 
 
@@ -125,3 +129,96 @@ def test_digital_score_is_none_when_nothing_is_evaluable():
 
     scores = SubScores(None, None, None, None, None, None)
     assert compute_digital_score(scores) is None
+
+
+def test_derive_problems_no_pages_reports_inaccessible():
+    problems = derive_problems([])
+    assert len(problems) == 1
+    assert "não pôde ser acessado" in problems[0]
+
+
+def test_derive_problems_unreachable_homepage_reports_only_that():
+    pages = [
+        PageSignals(url="https://example.com/", page_type=PageType.HOMEPAGE, http_status=500)
+    ]
+    problems = derive_problems(pages)
+    assert len(problems) == 1
+    assert "HTTP 500" in problems[0]
+
+
+def test_derive_problems_unreachable_homepage_with_no_status_still_reports_one_problem():
+    pages = [
+        PageSignals(url="https://example.com/", page_type=PageType.HOMEPAGE, http_status=None)
+    ]
+    problems = derive_problems(pages)
+    assert len(problems) == 1
+    assert "fora do ar" in problems[0]
+
+
+def test_derive_problems_healthy_site_with_services_page_has_no_problems():
+    pages = [
+        _homepage(),
+        PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
+    ]
+    assert derive_problems(pages) == []
+
+
+def test_derive_problems_flags_missing_viewport():
+    pages = [
+        _homepage(has_viewport_meta=False),
+        PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
+    ]
+    problems = derive_problems(pages)
+    assert any("celular" in p for p in problems)
+
+
+def test_derive_problems_flags_no_contact_method():
+    pages = [
+        _homepage(has_contact_form=False, has_phone_link=False, has_email_link=False, has_whatsapp_link=False),
+        PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
+    ]
+    problems = derive_problems(pages)
+    assert any("contato" in p for p in problems)
+
+
+def test_derive_problems_contact_page_alone_counts_as_a_contact_method():
+    pages = [
+        _homepage(has_contact_form=False, has_phone_link=False, has_email_link=False, has_whatsapp_link=False),
+        PageSignals(url="https://example.com/contato", page_type=PageType.CONTACT, http_status=200),
+        PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
+    ]
+    problems = derive_problems(pages)
+    assert not any("contato" in p for p in problems)
+
+
+def test_derive_problems_flags_missing_nav():
+    pages = [
+        _homepage(has_nav=False),
+        PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
+    ]
+    problems = derive_problems(pages)
+    assert any("navegação" in p for p in problems)
+
+
+def test_derive_problems_flags_no_services_page():
+    pages = [_homepage()]
+    problems = derive_problems(pages)
+    assert any("serviços" in p for p in problems)
+
+
+def test_derive_problems_flags_missing_title_or_description():
+    pages = [
+        _homepage(title=None),
+        PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
+    ]
+    problems = derive_problems(pages)
+    assert any("SEO" in p for p in problems)
+
+
+def test_derive_problems_flags_thin_content():
+    pages = [
+        _homepage(word_count=10),
+        PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
+    ]
+    problems = derive_problems(pages)
+    assert any("raso" in p for p in problems)
