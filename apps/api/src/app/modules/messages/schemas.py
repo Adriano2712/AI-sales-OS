@@ -8,6 +8,10 @@ from app.modules.messages.enums import MessageChannel, MessageStatus
 
 class MessageGenerateRequest(BaseModel):
     channel: MessageChannel
+    # None means "default from the company's own country" — see
+    # messages/ai_writer.py:default_language_for_country. Explicit values
+    # today: "pt-BR" or "en".
+    language: str | None = None
 
 
 class MessageRead(BaseModel):
@@ -17,6 +21,7 @@ class MessageRead(BaseModel):
     opportunity_id: uuid.UUID
     channel: MessageChannel
     status: MessageStatus
+    language: str
     generated_text: str
     sent_at: datetime | None
     response: str | None

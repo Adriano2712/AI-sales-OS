@@ -11,6 +11,7 @@ from app.modules.companies.service import get_company
 from app.modules.jobs.enums import JobType
 from app.modules.jobs.queue import get_queue
 from app.modules.jobs.service import get_or_create_job
+from app.modules.messages.ai_writer import default_language_for_country
 from app.modules.messages.enums import MessageChannel, MessageStatus
 from app.modules.messages.schemas import MessageGenerateRequest, MessageRead, MessageUpdate
 from app.modules.messages.service import (
@@ -56,13 +57,23 @@ async def generate_message_endpoint(
             detail="Company is flagged do_not_contact",
         )
 
-    idempotency_key = f"{opportunity_id}-{data.channel.value}"
+    # Resolved to a concrete value here (never left as None downstream) so
+    # the job payload is self-contained, and so requesting a different
+    # language for the same (opportunity, channel) is a genuinely distinct
+    # job rather than silently reusing yesterday's Portuguese one.
+    language = data.language or default_language_for_country(company.country)
+
+    idempotency_key = f"{opportunity_id}-{data.channel.value}-{language}"
     job = await get_or_create_job(
         db,
         tenant_id=context.tenant_id,
         job_type=JobType.MESSAGE_GENERATION,
         idempotency_key=idempotency_key,
-        payload={"opportunity_id": str(opportunity_id), "channel": data.channel.value},
+        payload={
+            "opportunity_id": str(opportunity_id),
+            "channel": data.channel.value,
+            "language": language,
+        },
     )
     await db.commit()
     get_queue().enqueue(
@@ -71,6 +82,7 @@ async def generate_message_endpoint(
         str(context.tenant_id),
         str(opportunity_id),
         data.channel.value,
+        language,
     )
     return {"job_id": str(job.id), "status": "queued"}
 
@@ -185,13 +197,18 @@ async def create_gmail_draft_endpoint(
             detail="Gmail is not configured (GMAIL_SMTP_USER / GMAIL_SMTP_APP_PASSWORD)",
         )
 
+    subject = (
+        f"Regarding {company.name}'s online presence"
+        if message.language == "en"
+        else f"Sobre a presença digital de {company.name}"
+    )
     try:
         await asyncio.to_thread(
             create_gmail_draft,
             settings.gmail_smtp_user,
             settings.gmail_smtp_app_password,
             company.email,
-            f"Sobre a presença digital de {company.name}",
+            subject,
             message.generated_text,
         )
     except GmailDraftError as exc:

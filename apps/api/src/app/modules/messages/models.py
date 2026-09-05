@@ -24,6 +24,11 @@ class Message(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     status: Mapped[MessageStatus] = mapped_column(
         Enum(MessageStatus, name="message_status"), default=MessageStatus.DRAFT
     )
+    # "pt-BR" or "en" today (see messages/ai_writer.py) — part of the
+    # (opportunity, channel, language) identity a non-terminal message is
+    # reused by, so asking for a different language never silently returns
+    # an existing draft written in the other one.
+    language: Mapped[str] = mapped_column(String(10), default="pt-BR")
     generated_text: Mapped[str] = mapped_column(String(4000))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Free text a human logs manually if a reply comes in — never something

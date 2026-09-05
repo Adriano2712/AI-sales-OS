@@ -108,7 +108,7 @@ async def test_message_generation_job_creates_a_draft_message(app_session_factor
         monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _FakeAIProvider())
         monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
 
-        await handler._run(str(job_id), str(tenant_id), str(opportunity_id), "WHATSAPP")
+        await handler._run(str(job_id), str(tenant_id), str(opportunity_id), "WHATSAPP", "pt-BR")
 
         async with app_session_factory() as session:
             await set_tenant_context(session, tenant_id)
@@ -186,7 +186,7 @@ async def test_rerunning_generation_reuses_the_draft_not_a_new_ai_call(
             await session.commit()
             job1_id = job1.id
 
-        await handler._run(str(job1_id), str(tenant_id), str(opportunity_id), "EMAIL")
+        await handler._run(str(job1_id), str(tenant_id), str(opportunity_id), "EMAIL", "pt-BR")
         assert call_count == 1
 
         async with app_session_factory() as session:
@@ -201,7 +201,7 @@ async def test_rerunning_generation_reuses_the_draft_not_a_new_ai_call(
             await session.commit()
             job2_id = job2.id
 
-        await handler._run(str(job2_id), str(tenant_id), str(opportunity_id), "EMAIL")
+        await handler._run(str(job2_id), str(tenant_id), str(opportunity_id), "EMAIL", "pt-BR")
         assert call_count == 1  # still 1 — no second AI call
     finally:
         async with admin_factory() as admin_db:
@@ -243,7 +243,7 @@ async def test_do_not_contact_blocks_message_generation(app_session_factory, mon
             await session.commit()
             job_id = job.id
 
-        await handler._run(str(job_id), str(tenant_id), str(opportunity_id), "WHATSAPP")
+        await handler._run(str(job_id), str(tenant_id), str(opportunity_id), "WHATSAPP", "pt-BR")
 
         async with app_session_factory() as session:
             await set_tenant_context(session, tenant_id)
@@ -254,6 +254,97 @@ async def test_do_not_contact_blocks_message_generation(app_session_factory, mon
 
             updated_job = await session.get(Job, job_id)
             assert updated_job.status == JobStatus.FAILED  # not retryable
+    finally:
+        async with admin_factory() as admin_db:
+            tenant = await admin_db.get(Tenant, tenant_id)
+            if tenant is not None:
+                await admin_db.delete(tenant)
+                await admin_db.commit()
+        await admin_engine.dispose()
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_requesting_a_different_language_creates_a_separate_message(
+    app_session_factory, monkeypatch
+):
+    """The reuse-by-default cost control must be scoped by language too —
+    asking for English must never silently hand back an existing Portuguese
+    draft (or vice versa)."""
+    import app.modules.jobs.handlers.message_generation as handler
+
+    call_count = 0
+
+    class _CountingFakeProvider(AIProvider):
+        name = "fake"
+
+        async def generate(self, request: AIRequest) -> AIResponse:
+            nonlocal call_count
+            call_count += 1
+            output = MessageAIOutput(text="Generated message.")
+            return AIResponse(
+                output=output,
+                raw_text=output.model_dump_json(),
+                provider=self.name,
+                model="fake-model",
+                tokens_input=10,
+                tokens_output=10,
+                latency_ms=1,
+                estimated_cost_usd=0.0,
+            )
+
+    tenant_id = uuid.uuid4()
+    admin_engine = create_async_engine(ADMIN_DATABASE_URL)
+    admin_factory = async_sessionmaker(admin_engine, expire_on_commit=False, class_=AsyncSession)
+
+    from app.modules.tenancy.models import Tenant
+
+    try:
+        company_id, opportunity_id = await _seed_tenant_company_and_opportunity(
+            admin_factory, app_session_factory, tenant_id
+        )
+
+        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _CountingFakeProvider())
+        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            job_pt = Job(
+                tenant_id=tenant_id,
+                type=JobType.MESSAGE_GENERATION,
+                status=JobStatus.PENDING,
+                idempotency_key=f"{opportunity_id}-EMAIL-pt-BR",
+            )
+            session.add(job_pt)
+            await session.commit()
+            job_pt_id = job_pt.id
+
+        await handler._run(str(job_pt_id), str(tenant_id), str(opportunity_id), "EMAIL", "pt-BR")
+        assert call_count == 1
+
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            job_en = Job(
+                tenant_id=tenant_id,
+                type=JobType.MESSAGE_GENERATION,
+                status=JobStatus.PENDING,
+                idempotency_key=f"{opportunity_id}-EMAIL-en",
+            )
+            session.add(job_en)
+            await session.commit()
+            job_en_id = job_en.id
+
+        await handler._run(str(job_en_id), str(tenant_id), str(opportunity_id), "EMAIL", "en")
+        assert call_count == 2  # a real second AI call — not reused across languages
+
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            result = await session.execute(
+                select(Message).where(Message.opportunity_id == opportunity_id)
+            )
+            messages = result.scalars().all()
+            assert len(messages) == 2
+            assert {m.language for m in messages} == {"pt-BR", "en"}
     finally:
         async with admin_factory() as admin_db:
             tenant = await admin_db.get(Tenant, tenant_id)

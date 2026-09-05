@@ -9,7 +9,7 @@ from app.core.config import get_settings
 from app.modules.ai_gateway.base import AIProvider
 from app.modules.ai_gateway.service import run_ai_task
 from app.modules.companies.models import Company
-from app.modules.messages.ai_writer import MessageAIOutput, build_ai_request
+from app.modules.messages.ai_writer import MessageAIOutput, build_ai_request, default_language_for_country
 from app.modules.messages.enums import VALID_MESSAGE_STATUS_TRANSITIONS, MessageChannel, MessageStatus
 from app.modules.messages.models import Message
 from app.modules.opportunities.models import Opportunity
@@ -42,13 +42,18 @@ def validate_message_status_transition(current: MessageStatus, new: MessageStatu
 
 
 async def get_existing_draft_or_approved(
-    db: AsyncSession, tenant_id: uuid.UUID, opportunity_id: uuid.UUID, channel: MessageChannel
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    opportunity_id: uuid.UUID,
+    channel: MessageChannel,
+    language: str,
 ) -> Message | None:
     result = await db.execute(
         select(Message).where(
             Message.tenant_id == tenant_id,
             Message.opportunity_id == opportunity_id,
             Message.channel == channel,
+            Message.language == language,
             Message.status.in_([MessageStatus.DRAFT, MessageStatus.APPROVED]),
         )
     )
@@ -62,16 +67,27 @@ async def generate_message(
     company: Company,
     channel: MessageChannel,
     ai_provider: AIProvider,
+    language: str | None = None,
 ) -> Message:
     """Cost control (spec section 39), same idempotent-by-default pattern as
     Fase 5's analyze_business: a non-terminal (DRAFT/APPROVED) message for
-    this exact (opportunity, channel) is reused instead of calling the AI
-    again. Regenerating an already-REJECTED/SENT message is a distinct,
-    explicit action, not something a repeated call does implicitly."""
+    this exact (opportunity, channel, language) is reused instead of calling
+    the AI again. Regenerating an already-REJECTED/SENT message, or asking
+    for a different language, is a distinct, explicit action — never
+    silently returns a draft written in the other language.
+
+    `language=None` defaults from the company's own country (see
+    ai_writer.default_language_for_country) rather than always assuming
+    Portuguese — real finding: this system's messages used to fabricate a
+    Brazilian identity even for companies outside Brazil."""
     if company.do_not_contact:
         raise CompanyDoNotContact(f"Company {company.id} is flagged do_not_contact")
 
-    existing = await get_existing_draft_or_approved(db, tenant_id, opportunity.id, channel)
+    effective_language = language or default_language_for_country(company.country)
+
+    existing = await get_existing_draft_or_approved(
+        db, tenant_id, opportunity.id, channel, effective_language
+    )
     if existing is not None:
         return existing
 
@@ -85,6 +101,7 @@ async def generate_message(
         reasons=opportunity.reasons,
         sender_name=settings.sender_company_name,
         sender_location=settings.sender_company_location,
+        language=effective_language,
     )
     ai_response = await run_ai_task(db, ai_provider, tenant_id, ai_request)
     output = cast(MessageAIOutput, ai_response.output)
@@ -94,6 +111,7 @@ async def generate_message(
         opportunity_id=opportunity.id,
         channel=channel,
         status=MessageStatus.DRAFT,
+        language=effective_language,
         generated_text=output.text,
     )
     db.add(message)

@@ -12,7 +12,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
 import { requireUser } from "@/lib/requireUser";
 import { badgeClass, buttonVariants, cardClass, inputClass, type BadgeVariant } from "@/lib/ui";
-import type { Message, MessageChannel } from "@/types/messages";
+import type { Message, MessageChannel, MessageLanguage } from "@/types/messages";
 import type {
   OpportunityClassification,
   OpportunityDetail,
@@ -37,6 +37,14 @@ const OUTCOME_OPTIONS: OpportunityOutcome[] = [
 ];
 
 const CHANNEL_OPTIONS: MessageChannel[] = ["WHATSAPP", "EMAIL", "LINKEDIN", "PHONE", "OTHER"];
+
+// "" means "let the server pick from the company's own country" — never a
+// literal language value on its own (see generateMessageAction).
+const LANGUAGE_OPTIONS: { value: MessageLanguage | ""; label: string }[] = [
+  { value: "", label: "Automático (pelo país da empresa)" },
+  { value: "pt-BR", label: "Português" },
+  { value: "en", label: "English" },
+];
 
 const CLASSIFICATION_VARIANT: Record<OpportunityClassification, BadgeVariant> = {
   HIGH: "success",
@@ -256,7 +264,8 @@ export default async function OpportunityDetailPage({
             action={async (formData: FormData) => {
               "use server";
               const channel = formData.get("channel") as MessageChannel;
-              await generateMessageAction(opportunity.id, channel);
+              const language = formData.get("language") as MessageLanguage | "";
+              await generateMessageAction(opportunity.id, channel, language);
             }}
             className="mt-3 flex flex-wrap items-center gap-2"
           >
@@ -264,6 +273,13 @@ export default async function OpportunityDetailPage({
               {CHANNEL_OPTIONS.map((channel) => (
                 <option key={channel} value={channel}>
                   {channel}
+                </option>
+              ))}
+            </select>
+            <select name="language" defaultValue="" className={`${inputClass} w-auto`}>
+              {LANGUAGE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
@@ -280,7 +296,9 @@ export default async function OpportunityDetailPage({
           {messages.map((message) => (
             <li key={message.id} className={cardClass}>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-gray-500">{message.channel}</span>
+                <span className="text-xs font-medium text-gray-500">
+                  {message.channel} · {message.language}
+                </span>
                 <span className={badgeClass(MESSAGE_STATUS_VARIANT[message.status])}>
                   {message.status}
                 </span>

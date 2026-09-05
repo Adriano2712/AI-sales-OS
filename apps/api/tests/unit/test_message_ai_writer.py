@@ -66,8 +66,56 @@ def test_build_ai_request_sender_stays_unknown_when_not_configured():
 
 def test_system_prompt_forbids_claiming_local_presence():
     """The actual bug this fixes lived in the system prompt's ambiguity —
-    guard the fix itself, not just the user_prompt's data."""
-    from app.modules.messages.ai_writer import _SYSTEM_PROMPT
+    guard the fix itself, not just the user_prompt's data. Checked via the
+    real request the function builds, in both languages, not the template
+    string directly — that's what actually reaches the model."""
+    for language in ("pt-BR", "en"):
+        request = build_ai_request(
+            company_name="Clínica Teste",
+            segment="clinics",
+            city="Natal",
+            problem=None,
+            potential_solution=None,
+            reasons=[],
+            language=language,
+        )
+        prompt = request.system_prompt.lower()
+        assert "daqui do" in prompt or "daqui de" in prompt
+        assert "never claim or imply" in prompt
 
-    assert "daqui do" in _SYSTEM_PROMPT.lower() or "daqui de" in _SYSTEM_PROMPT.lower()
-    assert "never claim or imply" in _SYSTEM_PROMPT.lower()
+
+def test_build_ai_request_defaults_to_portuguese():
+    request = build_ai_request(
+        company_name="Padaria Teste",
+        segment="restaurants",
+        city="Sorocaba",
+        problem=None,
+        potential_solution=None,
+        reasons=[],
+    )
+    assert "brazilian portuguese" in request.system_prompt.lower()
+
+
+def test_build_ai_request_writes_in_english_when_requested():
+    """Real use case: a US company (Texas restaurants) shouldn't get a
+    Portuguese message just because that's this system's historical
+    default."""
+    request = build_ai_request(
+        company_name="Tex-Mex Grill",
+        segment="restaurants",
+        city="Austin",
+        problem=None,
+        potential_solution=None,
+        reasons=[],
+        language="en",
+    )
+    assert "natural, professional english" in request.system_prompt.lower()
+    assert "brazilian portuguese" not in request.system_prompt.lower()
+
+
+def test_default_language_for_country():
+    from app.modules.messages.ai_writer import default_language_for_country
+
+    assert default_language_for_country("BR") == "pt-BR"
+    assert default_language_for_country("US") == "en"
+    assert default_language_for_country("PT") == "en"  # only BR gets Portuguese by default

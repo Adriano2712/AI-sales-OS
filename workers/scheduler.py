@@ -93,7 +93,7 @@ _RETRYABLE_JOB_HANDLERS: dict[JobType, tuple[str, list[str]]] = {
     JobType.SCORING: ("app.modules.jobs.handlers.scoring.run", ["company_id"]),
     JobType.MESSAGE_GENERATION: (
         "app.modules.jobs.handlers.message_generation.run",
-        ["opportunity_id", "channel"],
+        ["opportunity_id", "channel", "language"],
     ),
 }
 

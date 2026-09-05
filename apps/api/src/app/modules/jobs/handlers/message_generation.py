@@ -17,7 +17,7 @@ from app.modules.opportunities.models import Opportunity
 logger = get_logger(job_type="MESSAGE_GENERATION")
 
 
-async def _run(job_id: str, tenant_id: str, opportunity_id: str, channel: str) -> None:
+async def _run(job_id: str, tenant_id: str, opportunity_id: str, channel: str, language: str) -> None:
     tenant_uuid = uuid.UUID(tenant_id)
     job_uuid = uuid.UUID(job_id)
     opportunity_uuid = uuid.UUID(opportunity_id)
@@ -51,7 +51,7 @@ async def _run(job_id: str, tenant_id: str, opportunity_id: str, channel: str) -
         try:
             await set_tenant_context(db, tenant_uuid)
             message = await generate_message(
-                db, tenant_uuid, opportunity, company, channel_enum, provider
+                db, tenant_uuid, opportunity, company, channel_enum, provider, language=language
             )
             await log_event(
                 db,
@@ -84,7 +84,7 @@ async def _run(job_id: str, tenant_id: str, opportunity_id: str, channel: str) -
             logger.error("message_generation_failed", opportunity_id=opportunity_id, error=str(exc))
 
 
-def run(job_id: str, tenant_id: str, opportunity_id: str, channel: str) -> None:
+def run(job_id: str, tenant_id: str, opportunity_id: str, channel: str, language: str) -> None:
     """RQ entrypoint — bridges into the app's async DB layer, same pattern as
     the other job handlers."""
-    run_job_sync(_run(job_id, tenant_id, opportunity_id, channel))
+    run_job_sync(_run(job_id, tenant_id, opportunity_id, channel, language))

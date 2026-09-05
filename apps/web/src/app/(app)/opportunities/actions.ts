@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { apiFetch } from "@/lib/api";
-import type { MessageChannel, MessageStatus } from "@/types/messages";
+import type { MessageChannel, MessageLanguage, MessageStatus } from "@/types/messages";
 import type { OpportunityOutcome, OpportunityStatus } from "@/types/opportunities";
 
 export async function updateOpportunityStatusAction(
@@ -45,12 +45,15 @@ export async function updateOpportunityOutcomeAction(
 
 export async function generateMessageAction(
   opportunityId: string,
-  channel: MessageChannel
+  channel: MessageChannel,
+  language?: MessageLanguage | ""
 ): Promise<void> {
   const response = await apiFetch(`/api/v1/opportunities/${opportunityId}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ channel }),
+    // Empty string means "let the server default from the company's own
+    // country" — never send it as a literal language value.
+    body: JSON.stringify({ channel, language: language || null }),
   });
   if (!response.ok) {
     const body = await response.text();
