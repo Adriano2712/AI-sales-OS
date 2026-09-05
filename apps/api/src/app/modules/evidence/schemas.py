@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.modules.evidence.enums import EvidenceConfidence
+from app.modules.evidence.enums import EvidenceCategory, EvidenceConfidence, EvidencePolarity
 
 
 class EvidenceRead(BaseModel):
@@ -16,4 +16,6 @@ class EvidenceRead(BaseModel):
     source_url: str | None
     collected_at: datetime
     confidence: EvidenceConfidence
+    polarity: EvidencePolarity
+    category: EvidenceCategory
     supporting_data: dict

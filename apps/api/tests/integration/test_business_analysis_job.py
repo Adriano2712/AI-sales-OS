@@ -10,6 +10,7 @@ from app.modules.business_analysis.ai_analyst import BusinessAnalysisAIOutput
 from app.modules.business_analysis.models import BusinessAnalysis
 from app.modules.companies.enums import CompanyStatus
 from app.modules.companies.models import Company
+from app.modules.evidence.enums import EvidencePolarity
 from app.modules.evidence.models import Evidence
 from app.modules.jobs.enums import JobStatus, JobType
 from app.modules.jobs.models import Job
@@ -123,9 +124,14 @@ async def test_business_analysis_job_creates_analysis_and_evidence(
             evidence_result = await session.execute(
                 select(Evidence).where(Evidence.company_id == company_id)
             )
-            evidence_claims = {e.claim for e in evidence_result.scalars()}
-            assert "Test finding about the company." in evidence_claims
-            assert "Test problem identified." in evidence_claims
+            evidence_by_claim = {e.claim: e for e in evidence_result.scalars()}
+            assert "Test finding about the company." in evidence_by_claim
+            assert "Test problem identified." in evidence_by_claim
+            # Opportunity Signal classification (Fase 3): a "problem" is a
+            # positive signal by construction (a gap our services could
+            # address); a "finding" is a neutral observation.
+            assert evidence_by_claim["Test finding about the company."].polarity == EvidencePolarity.NEUTRAL
+            assert evidence_by_claim["Test problem identified."].polarity == EvidencePolarity.POSITIVE
 
             updated_job = await session.get(Job, job_id)
             assert updated_job.status == JobStatus.COMPLETED

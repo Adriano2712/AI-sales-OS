@@ -6,7 +6,7 @@ from sqlalchemy.exc import DBAPIError
 from app.core.db import set_tenant_context
 from app.modules.companies.enums import CompanyStatus
 from app.modules.companies.models import Company
-from app.modules.evidence.enums import EvidenceConfidence
+from app.modules.evidence.enums import EvidenceCategory, EvidenceConfidence, EvidencePolarity
 from app.modules.evidence.models import Evidence
 
 from .conftest import requires_live_db
@@ -38,6 +38,8 @@ def _evidence(tenant_id, company_id, suffix: str) -> Evidence:
         source="test",
         collected_at=datetime.now(UTC),
         confidence=EvidenceConfidence.HIGH,
+        polarity=EvidencePolarity.NEUTRAL,
+        category=EvidenceCategory.OTHER,
     )
 
 

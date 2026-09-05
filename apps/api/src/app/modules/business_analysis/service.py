@@ -10,7 +10,7 @@ from app.modules.business_analysis.ai_analyst import BusinessAnalysisAIOutput, b
 from app.modules.business_analysis.models import BusinessAnalysis
 from app.modules.business_analysis.scoring import compute_deterministic_scores, compute_overall_score
 from app.modules.companies.models import Company
-from app.modules.evidence.enums import EvidenceConfidence
+from app.modules.evidence.enums import EvidenceCategory, EvidenceConfidence, EvidencePolarity
 from app.modules.evidence.service import get_or_create_evidence, list_evidence_for_company
 from app.modules.website_analysis.service import get_latest_analysis as get_latest_website_analysis
 
@@ -107,6 +107,11 @@ async def analyze_business(
             claim=finding,
             source="ai_analyst",
             confidence=EvidenceConfidence.MEDIUM,
+            # A finding is a neutral observation, not itself an opportunity
+            # signal — unlike `problems`, the AI isn't asked to judge these
+            # as good or bad for us, just to report them.
+            polarity=EvidencePolarity.NEUTRAL,
+            category=EvidenceCategory.BUSINESS_ANALYSIS,
             supporting_data={"kind": "finding"},
         )
     for problem in output.problems:
@@ -117,6 +122,12 @@ async def analyze_business(
             claim=problem,
             source="ai_analyst",
             confidence=EvidenceConfidence.MEDIUM,
+            # A "problem" here is, by construction, scoped to the AI
+            # Analyst's own prompt (ai_analyst.py) to mean "a gap a software
+            # house's services could address" — POSITIVE for opportunity by
+            # definition, not a flaw we're grading the business on.
+            polarity=EvidencePolarity.POSITIVE,
+            category=EvidenceCategory.BUSINESS_ANALYSIS,
             supporting_data={"kind": "problem"},
         )
 

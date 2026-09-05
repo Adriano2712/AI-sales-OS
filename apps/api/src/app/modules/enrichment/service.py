@@ -4,9 +4,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.companies.models import Company, CompanySource
 from app.modules.companies.service import list_sources
-from app.modules.evidence.enums import EvidenceConfidence
+from app.modules.evidence.enums import EvidenceCategory, EvidenceConfidence, EvidencePolarity
 from app.modules.evidence.models import Evidence
 from app.modules.evidence.service import get_or_create_evidence
+
+# Opportunity Signal classification (Fase 3) for each supplementary field —
+# kept as one explicit, reviewable table rather than inline judgment calls
+# scattered through the loop below. A field found here is real, public
+# information (never a guess), so it's never UNKNOWN; polarity reflects what
+# it means for *our* opportunity, not a judgment on the business (see
+# EvidencePolarity's docstring). Any field not listed here (e.g. a future
+# addition to the extraction dicts above) safely defaults to
+# NEUTRAL/OTHER rather than crashing — but should get a real entry here.
+_SUPPLEMENTARY_FIELD_SIGNAL: dict[str, tuple[EvidencePolarity, EvidenceCategory]] = {
+    "opening_hours": (EvidencePolarity.NEUTRAL, EvidenceCategory.BUSINESS_STATUS),
+    "email": (EvidencePolarity.POSITIVE, EvidenceCategory.CONTACTABILITY),
+    "facebook": (EvidencePolarity.POSITIVE, EvidenceCategory.SOCIAL_PRESENCE),
+    "instagram": (EvidencePolarity.POSITIVE, EvidenceCategory.SOCIAL_PRESENCE),
+    "cuisine": (EvidencePolarity.NEUTRAL, EvidenceCategory.OTHER),
+    "category": (EvidencePolarity.NEUTRAL, EvidenceCategory.OTHER),
+}
 
 # OSM tag(s) to check, in priority order, for each logical field. Overpass
 # already returns every tag an element has (spec section 29's "informações
@@ -79,6 +96,10 @@ async def _record_core_field_evidence(
             claim=f"{field_label}: {value}",
             source=provider,
             confidence=EvidenceConfidence.HIGH,
+            # Real contact info found — matches the spec's own "contato
+            # disponível" positive example directly.
+            polarity=EvidencePolarity.POSITIVE,
+            category=EvidenceCategory.CONTACTABILITY,
             source_url=source_url,
             supporting_data={"field": field_label, "value": value},
         )
@@ -89,6 +110,10 @@ async def _record_core_field_evidence(
         claim=f"No public evidence of a {field_label} was found",
         source=provider,
         confidence=EvidenceConfidence.UNKNOWN,
+        # Absolute rule: absence of a phone/website is UNKNOWN, never a
+        # negative signal — maybe they just don't publish it.
+        polarity=EvidencePolarity.UNKNOWN,
+        category=EvidenceCategory.CONTACTABILITY,
         supporting_data={"field": field_label},
     )
 
@@ -129,6 +154,10 @@ async def enrich_company(
                         claim="Google Maps indica que este local está permanentemente fechado",
                         source=source.provider,
                         confidence=EvidenceConfidence.HIGH,
+                        # Matches the spec's own "negócio aparentemente
+                        # encerrado" negative example directly.
+                        polarity=EvidencePolarity.NEGATIVE,
+                        category=EvidenceCategory.BUSINESS_STATUS,
                         source_url=source.source_url,
                         supporting_data={"field": "permanently_closed", "source_id": str(source.id)},
                     )
@@ -138,6 +167,9 @@ async def enrich_company(
             if field in seen_fields:
                 continue
             seen_fields.add(field)
+            polarity, category = _SUPPLEMENTARY_FIELD_SIGNAL.get(
+                field, (EvidencePolarity.NEUTRAL, EvidenceCategory.OTHER)
+            )
             created.append(
                 await get_or_create_evidence(
                     db,
@@ -146,6 +178,8 @@ async def enrich_company(
                     claim=f"{field}: {value}",
                     source=source.provider,
                     confidence=EvidenceConfidence.HIGH,
+                    polarity=polarity,
+                    category=category,
                     source_url=source.source_url,
                     supporting_data={"field": field, "value": value, "source_id": str(source.id)},
                 )

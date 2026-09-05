@@ -7,7 +7,7 @@ from app.core.db import set_tenant_context
 from app.modules.companies.enums import CompanyStatus
 from app.modules.companies.models import Company, CompanySource
 from app.modules.enrichment.service import enrich_company
-from app.modules.evidence.enums import EvidenceConfidence
+from app.modules.evidence.enums import EvidenceCategory, EvidenceConfidence, EvidencePolarity
 from app.modules.evidence.models import Evidence
 
 from .conftest import requires_live_db
@@ -62,10 +62,11 @@ async def test_enrich_company_records_unknown_evidence_for_missing_core_fields(
         evidence_by_claim = {e.claim: e for e in result.scalars()}
 
         assert "No public evidence of a phone was found" in evidence_by_claim
-        assert (
-            evidence_by_claim["No public evidence of a phone was found"].confidence
-            == EvidenceConfidence.UNKNOWN
-        )
+        phone_evidence = evidence_by_claim["No public evidence of a phone was found"]
+        assert phone_evidence.confidence == EvidenceConfidence.UNKNOWN
+        # Opportunity Signal absolute rule (Fase 3): absence is UNKNOWN, never
+        # a negative signal just because we didn't find a phone number.
+        assert phone_evidence.polarity == EvidencePolarity.UNKNOWN
         assert "No public evidence of a website was found" in evidence_by_claim
 
 
@@ -120,13 +121,23 @@ async def test_enrich_company_records_high_confidence_evidence_for_present_field
         )
         evidence_by_claim = {e.claim: e for e in result.scalars()}
 
-        assert evidence_by_claim["phone: 1533334444"].confidence == EvidenceConfidence.HIGH
-        assert (
-            evidence_by_claim["website: https://restaurantecompleto.com.br"].confidence
-            == EvidenceConfidence.HIGH
-        )
+        phone_evidence = evidence_by_claim["phone: 1533334444"]
+        assert phone_evidence.confidence == EvidenceConfidence.HIGH
+        # Real contact info found — a positive contactability signal (Fase 3).
+        assert phone_evidence.polarity == EvidencePolarity.POSITIVE
+        assert phone_evidence.category == EvidenceCategory.CONTACTABILITY
+
+        website_evidence = evidence_by_claim["website: https://restaurantecompleto.com.br"]
+        assert website_evidence.confidence == EvidenceConfidence.HIGH
+        assert website_evidence.polarity == EvidencePolarity.POSITIVE
+
         assert "opening_hours: Mo-Su 11:00-23:00" in evidence_by_claim
+        opening_hours_evidence = evidence_by_claim["opening_hours: Mo-Su 11:00-23:00"]
+        assert opening_hours_evidence.polarity == EvidencePolarity.NEUTRAL
+        assert opening_hours_evidence.category == EvidenceCategory.BUSINESS_STATUS
+
         assert "cuisine: pizza" in evidence_by_claim
+        assert evidence_by_claim["cuisine: pizza"].category == EvidenceCategory.OTHER
 
 
 @requires_live_db
