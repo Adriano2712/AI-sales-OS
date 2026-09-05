@@ -18,6 +18,8 @@ _REAL_ITEM_SAMPLE = {
     "permanentlyClosed": False,
     "temporarilyClosed": False,
     "placeId": "ChIJpZ76ALCLxZQRd_wgpgmUd3o",
+    "totalScore": 4.7,
+    "reviewsCount": 312,
 }
 
 
@@ -30,7 +32,21 @@ def test_to_raw_company_maps_real_fields():
     assert result.phone == "+551532174006"  # prefers phoneUnformatted
     assert result.website == "https://www.facebook.com/RestauranteDaFazendaSorocaba/"
     assert result.permanently_closed is False
+    assert result.google_place_id == "ChIJpZ76ALCLxZQRd_wgpgmUd3o"
+    assert result.google_rating == 4.7
+    assert result.google_review_count == 312
     assert result.raw_data == {"apify_place": _REAL_ITEM_SAMPLE}
+
+
+def test_to_raw_company_leaves_google_reviews_none_when_absent():
+    """Real gap (Fase 4): a small fraction of real Apify results (1/41 in
+    this project's own captured data) have no totalScore/reviewsCount at
+    all — must stay None, never default to 0 (0 reviews is a real, different
+    claim from "no data")."""
+    item = {"title": "Sem Reviews", "placeId": "abc"}
+    result = ApifyProvider._to_raw_company(item, "restaurants", "Sorocaba", "SP", "BR")
+    assert result.google_rating is None
+    assert result.google_review_count is None
 
 
 def test_to_raw_company_falls_back_to_formatted_phone_when_unformatted_absent():

@@ -18,9 +18,13 @@ class ApifyProvider(DiscoveryProvider):
     OSM replaced by Apify. Uses the "Google Maps Scraper" actor
     (compass/crawler-google-places by default, configurable via
     settings.apify_discovery_actor). Field names below (title, phone,
-    phoneUnformatted, website, street, placeId, permanentlyClosed, ...) were
-    verified against a real, live run against this project's own Apify
-    account before writing this — not guessed (see docs/DISCOVERY.md)."""
+    phoneUnformatted, website, street, placeId, permanentlyClosed,
+    totalScore, reviewsCount, ...) were verified against a real, live run
+    against this project's own Apify account before writing this — not
+    guessed (see docs/DISCOVERY.md). No Instagram/Facebook handle field
+    exists anywhere in this actor's real payload (confirmed by inspecting
+    41 real captured results, Fase 4) — social intelligence for Apify-
+    sourced companies stays None rather than being invented."""
 
     name = "apify"
 
@@ -117,5 +121,8 @@ class ApifyProvider(DiscoveryProvider):
             phone=item.get("phoneUnformatted") or item.get("phone"),
             website=item.get("website"),
             permanently_closed=bool(item.get("permanentlyClosed")),
+            google_place_id=item.get("placeId"),
+            google_rating=item.get("totalScore"),
+            google_review_count=item.get("reviewsCount"),
             raw_data={"apify_place": item},
         )

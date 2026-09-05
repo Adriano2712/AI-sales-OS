@@ -107,6 +107,7 @@ class OverpassProvider(DiscoveryProvider):
             address=address,
             phone=_first_present(tags, "phone", "contact:phone", "mobile", "contact:mobile"),
             website=_first_present(tags, "website", "contact:website", "url"),
+            instagram=_first_present(tags, "contact:instagram", "instagram"),
             raw_data={"osm_tags": tags, "osm_type": osm_type, "osm_id": osm_id},
         )
 

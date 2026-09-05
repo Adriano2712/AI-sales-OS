@@ -93,6 +93,15 @@ class NormalizedRawCompany:
     # marking the company INVALID (see spec section 15's original ask: only
     # show places that are still active).
     permanently_closed: bool = False
+    # Fase 4 — only Apify's Google Maps actor reports these (totalScore/
+    # reviewsCount/placeId), confirmed against real captured payloads; always
+    # None from Overpass. instagram is the reverse: only Overpass exposes it
+    # (a contact:instagram/instagram OSM tag) — Apify's payload has no such
+    # field. Neither is ever guessed when a provider doesn't report it.
+    google_place_id: str | None = None
+    google_rating: float | None = None
+    google_review_count: int | None = None
+    instagram: str | None = None
     raw_data: dict = field(default_factory=dict)
 
     @property
@@ -214,6 +223,18 @@ def merge_missing_fields(company: Company, raw: NormalizedRawCompany) -> list[st
     if not company.address and raw.address:
         company.address = raw.address
         filled.append("address")
+    if not company.google_place_id and raw.google_place_id:
+        company.google_place_id = raw.google_place_id
+        filled.append("google_place_id")
+    if company.google_rating is None and raw.google_rating is not None:
+        company.google_rating = raw.google_rating
+        filled.append("google_rating")
+    if company.google_review_count is None and raw.google_review_count is not None:
+        company.google_review_count = raw.google_review_count
+        filled.append("google_review_count")
+    if not company.instagram_url and raw.instagram:
+        company.instagram_url = raw.instagram
+        filled.append("instagram_url")
     return filled
 
 
@@ -259,6 +280,10 @@ async def upsert_company_from_raw(
         country=raw.country,
         phone=raw.normalized_phone,
         website=raw.website,
+        google_place_id=raw.google_place_id,
+        google_rating=raw.google_rating,
+        google_review_count=raw.google_review_count,
+        instagram_url=raw.instagram,
         # A place a provider reports as permanently closed is discovered
         # already-invalid, not DISCOVERED-then-manually-corrected — real,
         # observed signal (Apify), not an inference (spec section 15/35).

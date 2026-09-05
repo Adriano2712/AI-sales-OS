@@ -20,7 +20,6 @@ _SUPPLEMENTARY_FIELD_SIGNAL: dict[str, tuple[EvidencePolarity, EvidenceCategory]
     "opening_hours": (EvidencePolarity.NEUTRAL, EvidenceCategory.BUSINESS_STATUS),
     "email": (EvidencePolarity.POSITIVE, EvidenceCategory.CONTACTABILITY),
     "facebook": (EvidencePolarity.POSITIVE, EvidenceCategory.SOCIAL_PRESENCE),
-    "instagram": (EvidencePolarity.POSITIVE, EvidenceCategory.SOCIAL_PRESENCE),
     "cuisine": (EvidencePolarity.NEUTRAL, EvidenceCategory.OTHER),
     "category": (EvidencePolarity.NEUTRAL, EvidenceCategory.OTHER),
 }
@@ -35,9 +34,15 @@ _SUPPLEMENTARY_TAG_SOURCES: dict[str, list[str]] = {
     "opening_hours": ["opening_hours"],
     "email": ["contact:email", "email"],
     "facebook": ["contact:facebook", "facebook"],
-    "instagram": ["contact:instagram", "instagram"],
     "cuisine": ["cuisine"],
 }
+# instagram is deliberately absent here (Fase 4): it's now a core field —
+# read from company.instagram_url (set at discovery time, see
+# discovery/providers/overpass.py) and always gets an evidence row either
+# way via _record_core_field_evidence, the same treatment as phone/website.
+# The master spec explicitly lists "Instagram not found" as an UNKNOWN
+# example — the old supplementary path silently emitted no evidence at all
+# when absent, which doesn't satisfy that.
 
 
 def extract_supplementary_fields(osm_tags: dict[str, str]) -> dict[str, str]:
@@ -83,11 +88,12 @@ async def _record_core_field_evidence(
     value: str | None,
     provider: str,
     source_url: str | None,
+    category: EvidenceCategory = EvidenceCategory.CONTACTABILITY,
 ) -> Evidence:
-    """Phone and website are spec-section-29 "important" fields — they get an
-    evidence entry either way: HIGH confidence citing the value if present,
-    or an explicit UNKNOWN claim if not. Never silently absent, never
-    asserted without a source (spec sections 34/35)."""
+    """Phone, website and (Fase 4) instagram are "important" fields that get
+    an evidence entry either way: HIGH confidence citing the value if
+    present, or an explicit UNKNOWN claim if not. Never silently absent,
+    never asserted without a source (spec sections 34/35)."""
     if value:
         return await get_or_create_evidence(
             db,
@@ -96,10 +102,11 @@ async def _record_core_field_evidence(
             claim=f"{field_label}: {value}",
             source=provider,
             confidence=EvidenceConfidence.HIGH,
-            # Real contact info found — matches the spec's own "contato
-            # disponível" positive example directly.
+            # Real contact/social presence found — matches the spec's own
+            # "contato disponível" / "presença social ativa" positive
+            # examples directly.
             polarity=EvidencePolarity.POSITIVE,
-            category=EvidenceCategory.CONTACTABILITY,
+            category=category,
             source_url=source_url,
             supporting_data={"field": field_label, "value": value},
         )
@@ -110,11 +117,59 @@ async def _record_core_field_evidence(
         claim=f"No public evidence of a {field_label} was found",
         source=provider,
         confidence=EvidenceConfidence.UNKNOWN,
-        # Absolute rule: absence of a phone/website is UNKNOWN, never a
-        # negative signal — maybe they just don't publish it.
+        # Absolute rule: absence of a phone/website/instagram is UNKNOWN,
+        # never a negative signal — maybe they just don't publish it.
         polarity=EvidencePolarity.UNKNOWN,
-        category=EvidenceCategory.CONTACTABILITY,
+        category=category,
         supporting_data={"field": field_label},
+    )
+
+
+async def _record_google_reviews_evidence(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    company: Company,
+    provider: str,
+    source_url: str | None,
+) -> Evidence:
+    """Google Review Intelligence (Fase 4). rating/review_count only ever
+    come from a real Apify Google Maps result (see companies/service.py) —
+    never invented. Presence is the signal recorded here (a real, discoverable,
+    reviewed business — CUSTOMER_VALIDATION), not a judgment on the rating's
+    *value* (a 2-star vs 5-star business isn't scored differently yet — that
+    kind of weighting belongs to Opportunity Score 2.0, a later phase, not to
+    evidence capture). Absence (not found on Google Maps, or only discovered
+    via Overpass which has no rating data) is UNKNOWN, never negative."""
+    if company.google_rating is not None:
+        claim = f"Google rating: {company.google_rating}"
+        if company.google_review_count is not None:
+            claim += f" ({company.google_review_count} reviews)"
+        return await get_or_create_evidence(
+            db,
+            tenant_id,
+            company.id,
+            claim=claim,
+            source=provider,
+            confidence=EvidenceConfidence.HIGH,
+            polarity=EvidencePolarity.POSITIVE,
+            category=EvidenceCategory.CUSTOMER_VALIDATION,
+            source_url=source_url,
+            supporting_data={
+                "field": "google_reviews",
+                "rating": company.google_rating,
+                "review_count": company.google_review_count,
+            },
+        )
+    return await get_or_create_evidence(
+        db,
+        tenant_id,
+        company.id,
+        claim="No Google rating/review data was found",
+        source=provider,
+        confidence=EvidenceConfidence.UNKNOWN,
+        polarity=EvidencePolarity.UNKNOWN,
+        category=EvidenceCategory.CUSTOMER_VALIDATION,
+        supporting_data={"field": "google_reviews"},
     )
 
 
@@ -133,6 +188,17 @@ async def enrich_company(
         await _record_core_field_evidence(
             db, tenant_id, company, "website", company.website, provider, source_url
         ),
+        await _record_core_field_evidence(
+            db,
+            tenant_id,
+            company,
+            "instagram",
+            company.instagram_url,
+            provider,
+            source_url,
+            category=EvidenceCategory.SOCIAL_PRESENCE,
+        ),
+        await _record_google_reviews_evidence(db, tenant_id, company, provider, source_url),
     ]
 
     seen_fields: set[str] = set()

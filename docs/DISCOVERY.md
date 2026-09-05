@@ -1,7 +1,7 @@
 # Discovery Engine
 
 **Status: built (Fase 2), enrichment added (Fase 3), multi-provider (OSM +
-Apify) added post-Fase-8.**
+Apify) added post-Fase-8, Google Review + Social Intelligence added (Fase 4).**
 
 ```
 Campaign -> Campaign Run -> Discovery Job -> [OSM, Apify] (concurrent) -> Raw Data
@@ -96,7 +96,33 @@ pattern as OSM's tag mapping.
 
 **Real fields used** (confirmed present in a live response, not guessed):
 `title`, `placeId`, `phone`/`phoneUnformatted`, `website`, `street`/`address`,
-`permanentlyClosed`, `openingHours`, `categoryName`.
+`permanentlyClosed`, `openingHours`, `categoryName`, `totalScore`,
+`reviewsCount`.
+
+**Google Review Intelligence (Fase 4)**: `totalScore`/`reviewsCount` were
+already present in every real Apify payload this project had ever captured
+(40 of 41 real `company_sources` rows at the time this was written) but were
+previously discarded — extracted now into `NormalizedRawCompany.google_rating`/
+`google_review_count`, alongside `google_place_id` (`placeId`), and carried
+onto `Company` at upsert time. `enrichment/service.py` turns their presence
+into a `CUSTOMER_VALIDATION` evidence signal — real third-party proof of an
+active, reviewed business — never a judgment on the rating's actual value
+(a 2-star vs. 5-star business isn't scored differently yet; that belongs to
+Opportunity Score 2.0, a later phase). Absence is `UNKNOWN`, per the
+Opportunity Signal's absolute rule, not a negative signal.
+
+**Social/Instagram Intelligence (Fase 4)**: inspected all 41 real captured
+Apify payloads — none contain an Instagram/Facebook handle field anywhere.
+Apify's Google Maps actor simply doesn't expose this, so it's never guessed
+for Apify-sourced companies. Overpass does have it, as an OSM tag
+(`contact:instagram`/`instagram`, same `_first_present` priority pattern as
+phone) — extracted into `NormalizedRawCompany.instagram` and stored on
+`Company.instagram_url`, a field deliberately separate from `website` (spec:
+"website != Instagram"). Promoted from a silent-if-absent "supplementary"
+field (Fase 3's original treatment) to a core field that always gets an
+evidence row, present-or-`UNKNOWN` — the master spec explicitly lists
+"Instagram not found" as an `UNKNOWN` example, which the old
+silent-when-absent supplementary path didn't satisfy.
 
 **Real finding, permanently closed places**: Apify's Google Maps data
 reports `permanentlyClosed` directly — OSM has no equivalent. A place

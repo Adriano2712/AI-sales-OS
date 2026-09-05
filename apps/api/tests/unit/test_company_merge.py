@@ -3,7 +3,15 @@ from app.modules.companies.service import NormalizedRawCompany, merge_missing_fi
 
 
 def _company(**overrides) -> Company:
-    defaults = dict(phone=None, website=None, address=None)
+    defaults = dict(
+        phone=None,
+        website=None,
+        address=None,
+        google_place_id=None,
+        google_rating=None,
+        google_review_count=None,
+        instagram_url=None,
+    )
     defaults.update(overrides)
     return Company(**defaults)
 
@@ -72,3 +80,33 @@ def test_noop_when_raw_has_nothing_new():
     raw = _raw(phone=None, website=None, address=None)
     filled = merge_missing_fields(company, raw)
     assert filled == []
+
+
+def test_fills_google_review_fields_when_company_has_none():
+    company = _company()
+    raw = _raw(google_place_id="ChIJabc123", google_rating=4.5, google_review_count=200)
+    filled = merge_missing_fields(company, raw)
+    assert set(filled) == {"google_place_id", "google_rating", "google_review_count"}
+    assert company.google_place_id == "ChIJabc123"
+    assert company.google_rating == 4.5
+    assert company.google_review_count == 200
+
+
+def test_fills_instagram_when_company_has_none():
+    company = _company()
+    raw = _raw(instagram="https://instagram.com/restaurantex")
+    filled = merge_missing_fields(company, raw)
+    assert filled == ["instagram_url"]
+    assert company.instagram_url == "https://instagram.com/restaurantex"
+
+
+def test_never_overwrites_existing_google_review_data():
+    """A later duplicate re-discovery (e.g. Overpass re-finding a company
+    Apify already enriched with real review data) must not clobber it —
+    same "não sobrescreva cegamente" contract as phone/website/address."""
+    company = _company(google_rating=4.9, google_review_count=17566)
+    raw = _raw(google_rating=1.0, google_review_count=1)
+    filled = merge_missing_fields(company, raw)
+    assert filled == []
+    assert company.google_rating == 4.9
+    assert company.google_review_count == 17566

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,6 +26,23 @@ class Company(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     # later by website_analysis/service.py from a real mailto: link found
     # while crawling the company's own site, see signal_extraction.py.
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Fase 4 (Google Review Intelligence). All three come only from a real
+    # Apify Google Maps result (totalScore/reviewsCount/placeId) — never
+    # inferred. None means "not found on Google Maps / not yet discovered
+    # via a provider that reports it" (Overpass has no equivalent), not "0
+    # reviews" — that distinction matters downstream (see enrichment/service.py's
+    # UNKNOWN-when-absent handling, the Opportunity Signal absolute rule).
+    google_place_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    google_rating: Mapped[float | None] = mapped_column(Float, nullable=True)
+    google_review_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Fase 4 (Social/Instagram Intelligence) — deliberately separate from
+    # `website`: a business's Instagram profile is not its website, and the
+    # two must never be conflated (spec: "website != Instagram"). Only ever
+    # set from a real contact:instagram/instagram OSM tag (see
+    # discovery/providers/overpass.py) — Apify's Google Maps actor doesn't
+    # expose this (confirmed against real captured payloads), so it stays
+    # None for Apify-only companies rather than guessing at a URL.
+    instagram_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[CompanyStatus] = mapped_column(
         Enum(CompanyStatus, name="company_status"), default=CompanyStatus.DISCOVERED
     )

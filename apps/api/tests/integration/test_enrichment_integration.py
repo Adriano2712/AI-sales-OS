@@ -69,6 +69,20 @@ async def test_enrich_company_records_unknown_evidence_for_missing_core_fields(
         assert phone_evidence.polarity == EvidencePolarity.UNKNOWN
         assert "No public evidence of a website was found" in evidence_by_claim
 
+        # Fase 4: instagram and Google review data get the exact same
+        # UNKNOWN-not-NEGATIVE treatment when absent.
+        assert "No public evidence of a instagram was found" in evidence_by_claim
+        instagram_evidence = evidence_by_claim["No public evidence of a instagram was found"]
+        assert instagram_evidence.confidence == EvidenceConfidence.UNKNOWN
+        assert instagram_evidence.polarity == EvidencePolarity.UNKNOWN
+        assert instagram_evidence.category == EvidenceCategory.SOCIAL_PRESENCE
+
+        assert "No Google rating/review data was found" in evidence_by_claim
+        reviews_evidence = evidence_by_claim["No Google rating/review data was found"]
+        assert reviews_evidence.confidence == EvidenceConfidence.UNKNOWN
+        assert reviews_evidence.polarity == EvidencePolarity.UNKNOWN
+        assert reviews_evidence.category == EvidenceCategory.CUSTOMER_VALIDATION
+
 
 @requires_live_db
 @pytest.mark.asyncio
@@ -89,6 +103,9 @@ async def test_enrich_company_records_high_confidence_evidence_for_present_field
             country="BR",
             phone="1533334444",
             website="https://restaurantecompleto.com.br",
+            instagram_url="https://instagram.com/restaurantecompleto",
+            google_rating=4.8,
+            google_review_count=512,
             status=CompanyStatus.DISCOVERED,
         )
         session.add(company)
@@ -139,6 +156,23 @@ async def test_enrich_company_records_high_confidence_evidence_for_present_field
         assert "cuisine: pizza" in evidence_by_claim
         assert evidence_by_claim["cuisine: pizza"].category == EvidenceCategory.OTHER
 
+        # Fase 4: instagram is a core field now — presence is POSITIVE/
+        # SOCIAL_PRESENCE, matching the spec's "presença social ativa"
+        # positive example.
+        instagram_evidence = evidence_by_claim["instagram: https://instagram.com/restaurantecompleto"]
+        assert instagram_evidence.confidence == EvidenceConfidence.HIGH
+        assert instagram_evidence.polarity == EvidencePolarity.POSITIVE
+        assert instagram_evidence.category == EvidenceCategory.SOCIAL_PRESENCE
+
+        # Fase 4: real Google review data is CUSTOMER_VALIDATION — proof of
+        # an active, discoverable business (spec's "muitas avaliações,
+        # rating alto" positive example), never a judgment on the rating's
+        # actual value.
+        reviews_evidence = evidence_by_claim["Google rating: 4.8 (512 reviews)"]
+        assert reviews_evidence.confidence == EvidenceConfidence.HIGH
+        assert reviews_evidence.polarity == EvidencePolarity.POSITIVE
+        assert reviews_evidence.category == EvidenceCategory.CUSTOMER_VALIDATION
+
 
 @requires_live_db
 @pytest.mark.asyncio
@@ -173,5 +207,6 @@ async def test_enrich_company_is_idempotent(app_session_factory, two_tenants):
             select(Evidence).where(Evidence.company_id == company.id)
         )
         evidence = result.scalars().all()
-        # Two core-field checks (phone, website), run twice — must not double up.
-        assert len(evidence) == 2
+        # Four core-field checks (phone, website, instagram, google reviews),
+        # run twice — must not double up.
+        assert len(evidence) == 4

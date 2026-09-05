@@ -48,6 +48,22 @@ def test_to_raw_company_leaves_phone_and_website_none_when_absent():
     assert result.website is None
 
 
+def test_to_raw_company_finds_instagram_under_contact_prefixed_tag():
+    element = {
+        "type": "node",
+        "id": 111,
+        "tags": {"name": "Restaurante Insta", "contact:instagram": "https://instagram.com/restauranteinsta"},
+    }
+    result = OverpassProvider._to_raw_company(element, "restaurants", "Sorocaba", "SP", "BR")
+    assert result.instagram == "https://instagram.com/restauranteinsta"
+
+
+def test_to_raw_company_leaves_instagram_none_when_absent():
+    element = {"type": "node", "id": 789, "tags": {"name": "Sem Contato"}}
+    result = OverpassProvider._to_raw_company(element, "restaurants", "Sorocaba", "SP", "BR")
+    assert result.instagram is None
+
+
 @pytest.mark.asyncio
 async def test_search_rejects_nationwide_sentinel():
     """Overpass has no equivalent to Apify's whole-country search — a

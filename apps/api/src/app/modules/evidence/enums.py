@@ -33,12 +33,15 @@ class EvidencePolarity(str, enum.Enum):
 class EvidenceCategory(str, enum.Enum):
     """What kind of signal this is — deliberately scoped to what the system
     actually collects today (see enrichment/service.py and
-    business_analysis/service.py), not speculative categories for data
-    sources that don't exist yet (Google reviews/Instagram followers land
-    in a later phase and can extend this enum then, non-breaking)."""
+    business_analysis/service.py). Extended non-breakingly in Fase 4 with
+    CUSTOMER_VALIDATION for Google review data (rating/review count) — real
+    third-party proof the business is active and has customers, distinct
+    from SOCIAL_PRESENCE (a channel existing) or CONTACTABILITY (a way to
+    reach them)."""
 
     CONTACTABILITY = "CONTACTABILITY"
     SOCIAL_PRESENCE = "SOCIAL_PRESENCE"
     BUSINESS_STATUS = "BUSINESS_STATUS"
     BUSINESS_ANALYSIS = "BUSINESS_ANALYSIS"
+    CUSTOMER_VALIDATION = "CUSTOMER_VALIDATION"
     OTHER = "OTHER"
