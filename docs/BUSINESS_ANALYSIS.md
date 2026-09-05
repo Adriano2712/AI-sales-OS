@@ -1,6 +1,7 @@
 # Business Analysis
 
-**Status: built (Fase 5).** First phase that actually calls the AI Gateway.
+**Status: built (Fase 5). service_fit_score/buying_potential added (master-plan Fase 6).**
+First phase that actually calls the AI Gateway.
 
 ```
 Company -> BUSINESS_ANALYSIS job -> deterministic scores + AI Analyst -> BusinessAnalysis
@@ -78,6 +79,53 @@ company whose website was down — `digital_score=0`, everything else
 - returned `confidence=30` (low) alongside `overall_score=62.7` — exactly
   spec section 42's worked example ("potentially good opportunity, but
   limited evidence"), produced from real data, not a synthetic test case.
+
+## Master-plan Fase 6: SERVICE_FIT_SCORE + BUYING_POTENTIAL
+
+**`SERVICE_FIT_SCORE`** answers a different question than `business_fit_score`:
+not "is this a good prospect for a software house in general" but "does this
+company fit the *specific* service(s) this campaign is selling". Requires a
+"what are we selling" concept that didn't exist anywhere in the codebase
+before this phase — added as `Campaign.services: list[str]` (ICP field,
+`campaigns/models.py`), resolved for a company via `Company.campaign_run_id
+-> CampaignRun.campaign_id -> Campaign.services`
+(`business_analysis/service.py::_get_campaign_services`). A company created
+outside a campaign run, or a campaign that never states its services, falls
+back to the exact same generic software-house description
+`business_fit_score` was already scored against before this field existed
+(`ai_analyst.py`'s `_DEFAULT_SERVICES`) — so an unset `services` list doesn't
+fabricate a service-specific number, it just makes `service_fit_score` track
+`business_fit_score` closely, which is honest.
+
+**`BUYING_POTENTIAL`** (`buying_potential_score` + `buying_potential_summary`)
+describes the *strength of observed signals* (digital gaps, activity level,
+review volume, etc.) — never a claim about what a business wants, intends,
+or has decided. This is enforced in code, not just prompted: a
+`field_validator` on `BusinessAnalysisAIOutput.buying_potential_summary`
+rejects a denylist of assertive purchase-intent phrases in English and
+Portuguese ("wants to buy", "quer comprar", "ready to buy", ...) before the
+output is ever trusted — same discipline as `evidence/service.py`'s
+`InvalidEvidencePolarity` check for the Opportunity Signal's own absolute
+rule. `buying_potential_summary` becomes an `Evidence` row like
+findings/problems, but with `NEUTRAL` polarity always — mapping
+buying-potential *strength* to a POSITIVE/NEGATIVE opportunity judgment
+would mean inventing a threshold this phase wasn't asked to define (that
+weighting belongs to Opportunity Score 2.0, a later phase).
+
+Both fields are additive to `BusinessAnalysis` and `BusinessAnalysisAIOutput`
+— confirmed non-breaking for `opportunities/service.py::score_company`,
+which only reads `business_fit_score`/`activity_score`/`need_score`/
+`confidence`/`problems` by name and doesn't iterate the model's full field
+set. Wiring `service_fit_score`/`buying_potential_score` into opportunity
+scoring itself is deliberately deferred to Fase 7 (Opportunity Score 2.0).
+
+**Real end-to-end validation**: created a real `Campaign` (`services=
+["online scheduling", "patient reminders"]`) + `CampaignRun` + `Company`
+against the live database, ran `analyze_business` for real, and confirmed
+the campaign's own services (not the generic fallback) reached the AI
+prompt verbatim, the returned `service_fit_score`/`buying_potential_score`/
+`buying_potential_summary` persisted correctly, and the buying-potential
+Evidence row was recorded as `NEUTRAL`/`BUSINESS_ANALYSIS` — then cleaned up.
 
 ## Data model
 

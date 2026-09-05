@@ -9,10 +9,31 @@ from app.modules.ai_gateway.service import run_ai_task_routed
 from app.modules.business_analysis.ai_analyst import BusinessAnalysisAIOutput, build_ai_request
 from app.modules.business_analysis.models import BusinessAnalysis
 from app.modules.business_analysis.scoring import compute_deterministic_scores, compute_overall_score
+from app.modules.campaigns.models import Campaign, CampaignRun
 from app.modules.companies.models import Company
 from app.modules.evidence.enums import EvidenceCategory, EvidenceConfidence, EvidencePolarity
 from app.modules.evidence.service import get_or_create_evidence, list_evidence_for_company
 from app.modules.website_analysis.service import get_latest_analysis as get_latest_website_analysis
+
+
+async def _get_campaign_services(
+    db: AsyncSession, tenant_id: uuid.UUID, company: Company
+) -> list[str]:
+    """Fase 6: SERVICE_FIT_SCORE needs to know what the owning campaign is
+    actually selling. `Company.campaign_run_id` is "first discovered by"
+    (see companies/models.py) — a company created outside a campaign run
+    (or whose campaign never stated a services list) has none, and the AI
+    Analyst falls back to a generic description (see ai_analyst.py's
+    _DEFAULT_SERVICES) rather than this returning a fabricated list."""
+    if company.campaign_run_id is None:
+        return []
+    result = await db.execute(
+        select(Campaign.services)
+        .join(CampaignRun, CampaignRun.campaign_id == Campaign.id)
+        .where(CampaignRun.id == company.campaign_run_id, Campaign.tenant_id == tenant_id)
+    )
+    services = result.scalar_one_or_none()
+    return services or []
 
 
 async def get_latest_business_analysis(
@@ -68,6 +89,7 @@ async def analyze_business(
         }
 
     evidence_claims = [(e.claim, e.confidence.value) for e in evidence_list]
+    services = await _get_campaign_services(db, tenant_id, company)
 
     ai_request = build_ai_request(
         company_name=company.name,
@@ -79,6 +101,7 @@ async def analyze_business(
         need_score=deterministic.need_score,
         website_findings=website_findings,
         evidence_claims=evidence_claims,
+        services=services,
     )
 
     ai_response = await run_ai_task_routed(db, tenant_id, ai_request)
@@ -133,6 +156,25 @@ async def analyze_business(
             supporting_data={"kind": "problem"},
         )
 
+    # Fase 6: buying_potential_summary is prose, same treatment as
+    # findings/problems above. NEUTRAL polarity — deliberately not mapped
+    # to POSITIVE/NEGATIVE from buying_potential_score: that would mean
+    # inventing a threshold-based judgment call this phase wasn't asked to
+    # make (that kind of weighting belongs to Opportunity Score 2.0, a
+    # later phase). This is a descriptive signal-strength read, not itself
+    # an assertion that the opportunity is good or bad.
+    await get_or_create_evidence(
+        db,
+        tenant_id,
+        company.id,
+        claim=output.buying_potential_summary,
+        source="ai_analyst",
+        confidence=EvidenceConfidence.MEDIUM,
+        polarity=EvidencePolarity.NEUTRAL,
+        category=EvidenceCategory.BUSINESS_ANALYSIS,
+        supporting_data={"kind": "buying_potential", "score": output.buying_potential_score},
+    )
+
     analysis = BusinessAnalysis(
         tenant_id=tenant_id,
         company_id=company.id,
@@ -141,6 +183,9 @@ async def analyze_business(
         digital_maturity_score=deterministic.digital_maturity_score,
         need_score=deterministic.need_score,
         compatibility_score=float(output.compatibility_score),
+        service_fit_score=float(output.service_fit_score),
+        buying_potential_score=float(output.buying_potential_score),
+        buying_potential_summary=output.buying_potential_summary,
         overall_score=overall_score,
         confidence=float(output.confidence),
         findings=output.findings,

@@ -14,6 +14,7 @@ class CampaignCreate(BaseModel):
     country: str = Field(default="BR", min_length=2, max_length=2)
     target_quantity: int = Field(gt=0)
     filters: dict = Field(default_factory=dict)
+    services: list[str] = Field(default_factory=list)
 
 
 class CampaignUpdate(BaseModel):
@@ -23,6 +24,7 @@ class CampaignUpdate(BaseModel):
     state: str | None = Field(default=None, min_length=1, max_length=100)
     target_quantity: int | None = Field(default=None, gt=0)
     filters: dict | None = None
+    services: list[str] | None = None
     status: CampaignStatus | None = None
 
 
@@ -38,6 +40,7 @@ class CampaignRead(BaseModel):
     country: str
     target_quantity: int
     filters: dict
+    services: list[str]
     status: CampaignStatus
     created_at: datetime
     updated_at: datetime

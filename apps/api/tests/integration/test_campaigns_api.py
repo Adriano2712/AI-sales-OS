@@ -13,6 +13,7 @@ def _campaign_payload(**overrides) -> dict:
         "country": "BR",
         "target_quantity": 33,
         "filters": {},
+        "services": ["website", "e-commerce"],
     }
     payload.update(overrides)
     return payload
@@ -37,6 +38,9 @@ async def test_full_campaign_lifecycle(authenticated_client, two_tenants):
         assert created.status_code == 201, created.text
         campaign = created.json()
         assert campaign["status"] == "DRAFT"
+        # Fase 6 ICP field — the services this campaign is selling, the
+        # anchor for SERVICE_FIT_SCORE.
+        assert campaign["services"] == ["website", "e-commerce"]
         campaign_id = campaign["id"]
 
         listed = await client.get("/api/v1/campaigns", headers=headers)

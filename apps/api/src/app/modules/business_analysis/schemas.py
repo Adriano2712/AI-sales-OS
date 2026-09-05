@@ -14,6 +14,9 @@ class BusinessAnalysisRead(BaseModel):
     digital_maturity_score: float | None
     need_score: float | None
     compatibility_score: float | None
+    service_fit_score: float | None
+    buying_potential_score: float | None
+    buying_potential_summary: str | None
     overall_score: float | None
     confidence: float | None
     findings: list[str]

@@ -29,6 +29,9 @@ class _FakeAIProvider(AIProvider):
         output = BusinessAnalysisAIOutput(
             business_fit_score=70,
             compatibility_score=60,
+            service_fit_score=65,
+            buying_potential_score=50,
+            buying_potential_summary="Some signals suggest moderate digital investment potential.",
             confidence=55,
             findings=["Test finding about the company."],
             problems=["Test problem identified."],
@@ -112,6 +115,11 @@ async def test_business_analysis_job_creates_analysis_and_evidence(
             analysis = analysis_result.scalar_one()
             assert analysis.business_fit_score == 70.0
             assert analysis.compatibility_score == 60.0
+            assert analysis.service_fit_score == 65.0
+            assert analysis.buying_potential_score == 50.0
+            assert analysis.buying_potential_summary == (
+                "Some signals suggest moderate digital investment potential."
+            )
             assert analysis.confidence == 55.0
             # No website -> digital_maturity_score deterministically 0,
             # need_score deterministically 100 (see scoring.py).
@@ -133,8 +141,138 @@ async def test_business_analysis_job_creates_analysis_and_evidence(
             assert evidence_by_claim["Test finding about the company."].polarity == EvidencePolarity.NEUTRAL
             assert evidence_by_claim["Test problem identified."].polarity == EvidencePolarity.POSITIVE
 
+            # Fase 6: buying_potential_summary also becomes Evidence, always
+            # NEUTRAL — a descriptive signal-strength read, not itself a
+            # judgment of good/bad opportunity (see service.py's comment).
+            buying_evidence = evidence_by_claim[
+                "Some signals suggest moderate digital investment potential."
+            ]
+            assert buying_evidence.polarity == EvidencePolarity.NEUTRAL
+
             updated_job = await session.get(Job, job_id)
             assert updated_job.status == JobStatus.COMPLETED
+    finally:
+        async with admin_factory() as admin_db:
+            tenant = await admin_db.get(Tenant, tenant_id)
+            if tenant is not None:
+                await admin_db.delete(tenant)
+                await admin_db.commit()
+        await admin_engine.dispose()
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_service_fit_score_is_scored_against_the_campaigns_own_services(
+    app_session_factory, monkeypatch
+):
+    """Fase 6: SERVICE_FIT_SCORE is contextual per campaign — a company
+    discovered through a campaign that states its own `services` must have
+    that exact list reach the AI prompt, not the generic fallback list."""
+    import app.modules.jobs.handlers.business_analysis as handler
+    from app.modules.campaigns.enums import CampaignStatus
+    from app.modules.campaigns.models import Campaign, CampaignRun
+
+    captured_prompts: list[str] = []
+
+    class _CapturingFakeProvider(AIProvider):
+        name = "fake"
+
+        async def generate(self, request: AIRequest) -> AIResponse:
+            captured_prompts.append(request.user_prompt)
+            output = BusinessAnalysisAIOutput(
+                business_fit_score=70,
+                compatibility_score=60,
+                service_fit_score=80,
+                buying_potential_score=50,
+                buying_potential_summary="Signals suggest some potential.",
+                confidence=55,
+                findings=[],
+                problems=[],
+            )
+            return AIResponse(
+                output=output,
+                raw_text=output.model_dump_json(),
+                provider=self.name,
+                model="fake-model",
+                tokens_input=100,
+                tokens_output=50,
+                latency_ms=1,
+                estimated_cost_usd=0.0,
+            )
+
+    tenant_id = uuid.uuid4()
+    admin_engine = create_async_engine(ADMIN_DATABASE_URL)
+    admin_factory = async_sessionmaker(admin_engine, expire_on_commit=False, class_=AsyncSession)
+
+    from app.modules.tenancy.models import Tenant
+
+    async with admin_factory() as admin_db:
+        tenant = Tenant(id=tenant_id, name=f"Service Fit Test Tenant {uuid.uuid4().hex[:6]}")
+        admin_db.add(tenant)
+        await admin_db.commit()
+
+    try:
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            campaign = Campaign(
+                tenant_id=tenant_id,
+                name="Campanha Agendamento Online",
+                segment="clinics",
+                cities=["Sorocaba"],
+                state="SP",
+                country="BR",
+                target_quantity=10,
+                services=["online scheduling", "patient reminders"],
+                status=CampaignStatus.ACTIVE,
+            )
+            session.add(campaign)
+            await session.flush()
+            run = CampaignRun(tenant_id=tenant_id, campaign_id=campaign.id)
+            session.add(run)
+            await session.flush()
+
+            company = Company(
+                tenant_id=tenant_id,
+                name="Clinica Com Campanha",
+                normalized_name="clinica com campanha",
+                segment="clinics",
+                city="Sorocaba",
+                state="SP",
+                country="BR",
+                status=CompanyStatus.DISCOVERED,
+                campaign_run_id=run.id,
+            )
+            session.add(company)
+            await session.flush()
+            job = Job(
+                tenant_id=tenant_id,
+                type=JobType.BUSINESS_ANALYSIS,
+                status=JobStatus.PENDING,
+                idempotency_key=str(company.id),
+            )
+            session.add(job)
+            await session.commit()
+            company_id, job_id = company.id, job.id
+
+        import app.modules.ai_gateway.service as ai_gateway_service
+
+        fake_router = lambda task: _CapturingFakeProvider()  # noqa: E731
+        monkeypatch.setattr(handler, "get_provider_for_task", fake_router)
+        monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
+
+        await handler._run(str(job_id), str(tenant_id), str(company_id))
+
+        assert len(captured_prompts) == 1
+        assert "online scheduling, patient reminders" in captured_prompts[0]
+        assert "Services being sold in this campaign" in captured_prompts[0]
+
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            analysis_result = await session.execute(
+                select(BusinessAnalysis).where(BusinessAnalysis.company_id == company_id)
+            )
+            analysis = analysis_result.scalar_one()
+            assert analysis.service_fit_score == 80.0
     finally:
         async with admin_factory() as admin_db:
             tenant = await admin_db.get(Tenant, tenant_id)
@@ -164,6 +302,9 @@ async def test_rerunning_business_analysis_does_not_call_ai_again(
             output = BusinessAnalysisAIOutput(
                 business_fit_score=50,
                 compatibility_score=50,
+                service_fit_score=50,
+                buying_potential_score=50,
+                buying_potential_summary="Signals are inconclusive so far.",
                 confidence=50,
                 findings=[],
                 problems=[],

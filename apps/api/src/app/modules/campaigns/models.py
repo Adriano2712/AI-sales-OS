@@ -22,6 +22,14 @@ class Campaign(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     country: Mapped[str] = mapped_column(String(2), default="BR")
     target_quantity: Mapped[int] = mapped_column(Integer)
     filters: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Fase 6 (ICP: "services" dimension) — the service(s) this campaign is
+    # actually selling, e.g. ["website", "e-commerce"]. Free strings, same
+    # reasoning as `segment` (no code deploy needed to add a new service
+    # offering). Empty by default: this is the one new ICP field with a real
+    # immediate consumer (SERVICE_FIT_SCORE, business_analysis/ai_analyst.py)
+    # — the AI falls back to a generic software-house service list when this
+    # is empty, exactly like it already did before this field existed.
+    services: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     status: Mapped[CampaignStatus] = mapped_column(
         Enum(CampaignStatus, name="campaign_status"), default=CampaignStatus.DRAFT
     )
