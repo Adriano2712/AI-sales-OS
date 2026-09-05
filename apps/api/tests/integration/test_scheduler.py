@@ -15,8 +15,18 @@ from app.modules.campaigns.enums import CampaignRunStatus, CampaignStatus
 from app.modules.campaigns.models import Campaign, CampaignRun
 from app.modules.companies.enums import CompanyStatus
 from app.modules.companies.models import Company
+from app.modules.jobs.enums import JobStatus, JobType
+from app.modules.jobs.models import Job
 
-from .conftest import ADMIN_DATABASE_URL, requires_live_db
+from .conftest import ADMIN_DATABASE_URL, requires_live_db, requires_matching_env
+
+
+class _FakeQueue:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def enqueue(self, *args) -> None:
+        self.calls.append(args)
 
 
 def test_today_segment_returns_a_valid_rotation_member():
@@ -283,3 +293,214 @@ async def test_maybe_send_pending_digests_skips_when_email_not_configured(
         await set_tenant_context(session, tenant_a.id)
         await scheduler._maybe_send_pending_digests(session, tenant_a.id)
         assert calls == []
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_retry_stuck_jobs_reenqueues_a_retrying_job(
+    app_session_factory, monkeypatch, two_tenants
+):
+    """The actual fix: a job the handler marked RETRYING must get a real
+    second attempt, not sit there forever (see _RETRYABLE_JOB_HANDLERS)."""
+    import scheduler
+
+    fake_queue = _FakeQueue()
+    monkeypatch.setattr(scheduler, "get_queue", lambda: fake_queue)
+
+    tenant_a, _ = two_tenants
+    company_id = uuid.uuid4()
+
+    async with app_session_factory() as session:
+        await set_tenant_context(session, tenant_a.id)
+        job = Job(
+            tenant_id=tenant_a.id,
+            type=JobType.SCORING,
+            status=JobStatus.RETRYING,
+            idempotency_key=str(company_id),
+            payload={"company_id": str(company_id)},
+            error="Output failed schema validation: ...",
+            attempts=1,
+        )
+        session.add(job)
+        await session.commit()
+        job_id = job.id
+
+        await set_tenant_context(session, tenant_a.id)
+        await scheduler._retry_stuck_jobs(session, tenant_a.id)
+
+        await set_tenant_context(session, tenant_a.id)
+        refreshed = await session.get(Job, job_id)
+        assert refreshed.status == JobStatus.PENDING
+        assert refreshed.error is None
+
+    assert len(fake_queue.calls) == 1
+    assert fake_queue.calls[0] == (
+        "app.modules.jobs.handlers.scoring.run",
+        str(job_id),
+        str(tenant_a.id),
+        str(company_id),
+    )
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_retry_stuck_jobs_gives_up_after_max_attempts(
+    app_session_factory, monkeypatch, two_tenants
+):
+    """Past the cap, a job becomes terminal FAILED — never silent limbo."""
+    import scheduler
+
+    fake_queue = _FakeQueue()
+    monkeypatch.setattr(scheduler, "get_queue", lambda: fake_queue)
+
+    tenant_a, _ = two_tenants
+    company_id = uuid.uuid4()
+
+    async with app_session_factory() as session:
+        await set_tenant_context(session, tenant_a.id)
+        job = Job(
+            tenant_id=tenant_a.id,
+            type=JobType.BUSINESS_ANALYSIS,
+            status=JobStatus.RETRYING,
+            idempotency_key=str(company_id),
+            payload={"company_id": str(company_id)},
+            error="Output failed schema validation: ...",
+            attempts=scheduler._MAX_JOB_ATTEMPTS,
+        )
+        session.add(job)
+        await session.commit()
+        job_id = job.id
+
+        await set_tenant_context(session, tenant_a.id)
+        await scheduler._retry_stuck_jobs(session, tenant_a.id)
+
+        await set_tenant_context(session, tenant_a.id)
+        refreshed = await session.get(Job, job_id)
+        assert refreshed.status == JobStatus.FAILED
+
+    assert fake_queue.calls == []  # never retried past the cap
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_retry_stuck_jobs_skips_job_type_with_no_handler_mapping(
+    app_session_factory, monkeypatch, two_tenants
+):
+    """PING (and anything else not in _RETRYABLE_JOB_HANDLERS) is left
+    alone rather than crashing the sweep."""
+    import scheduler
+
+    fake_queue = _FakeQueue()
+    monkeypatch.setattr(scheduler, "get_queue", lambda: fake_queue)
+
+    tenant_a, _ = two_tenants
+
+    async with app_session_factory() as session:
+        await set_tenant_context(session, tenant_a.id)
+        job = Job(
+            tenant_id=tenant_a.id,
+            type=JobType.PING,
+            status=JobStatus.RETRYING,
+            idempotency_key="ping-test",
+            payload={},
+            attempts=1,
+        )
+        session.add(job)
+        await session.commit()
+        job_id = job.id
+
+        await set_tenant_context(session, tenant_a.id)
+        await scheduler._retry_stuck_jobs(session, tenant_a.id)
+
+        await set_tenant_context(session, tenant_a.id)
+        refreshed = await session.get(Job, job_id)
+        assert refreshed.status == JobStatus.RETRYING  # untouched, not crashed
+
+    assert fake_queue.calls == []
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_retry_stuck_jobs_skips_job_missing_expected_payload_key(
+    app_session_factory, monkeypatch, two_tenants
+):
+    import scheduler
+
+    fake_queue = _FakeQueue()
+    monkeypatch.setattr(scheduler, "get_queue", lambda: fake_queue)
+
+    tenant_a, _ = two_tenants
+
+    async with app_session_factory() as session:
+        await set_tenant_context(session, tenant_a.id)
+        job = Job(
+            tenant_id=tenant_a.id,
+            type=JobType.SCORING,
+            status=JobStatus.RETRYING,
+            idempotency_key="missing-payload-test",
+            payload={},  # missing "company_id"
+            attempts=1,
+        )
+        session.add(job)
+        await session.commit()
+        job_id = job.id
+
+        await set_tenant_context(session, tenant_a.id)
+        await scheduler._retry_stuck_jobs(session, tenant_a.id)
+
+        await set_tenant_context(session, tenant_a.id)
+        refreshed = await session.get(Job, job_id)
+        assert refreshed.status == JobStatus.RETRYING  # left alone, not crashed
+
+    assert fake_queue.calls == []
+
+
+@requires_live_db
+@requires_matching_env
+@pytest.mark.asyncio
+async def test_retry_stuck_jobs_all_tenants_covers_every_tenant(
+    app_session_factory, monkeypatch, two_tenants
+):
+    """Deliberately not scoped to DAILY_DISCOVERY_TENANT_ID — job-retry
+    reliability applies to every tenant, not just the one configured for
+    the daily digest automation."""
+    import scheduler
+
+    fake_queue = _FakeQueue()
+    monkeypatch.setattr(scheduler, "get_queue", lambda: fake_queue)
+
+    tenant_a, tenant_b = two_tenants
+    company_a, company_b = uuid.uuid4(), uuid.uuid4()
+
+    async with app_session_factory() as session:
+        await set_tenant_context(session, tenant_a.id)
+        session.add(
+            Job(
+                tenant_id=tenant_a.id,
+                type=JobType.SCORING,
+                status=JobStatus.RETRYING,
+                idempotency_key=str(company_a),
+                payload={"company_id": str(company_a)},
+                attempts=1,
+            )
+        )
+        await session.commit()
+
+        await set_tenant_context(session, tenant_b.id)
+        session.add(
+            Job(
+                tenant_id=tenant_b.id,
+                type=JobType.SCORING,
+                status=JobStatus.RETRYING,
+                idempotency_key=str(company_b),
+                payload={"company_id": str(company_b)},
+                attempts=1,
+            )
+        )
+        await session.commit()
+
+    await scheduler._retry_stuck_jobs_all_tenants()
+
+    retried_company_ids = {call[3] for call in fake_queue.calls}
+    assert str(company_a) in retried_company_ids
+    assert str(company_b) in retried_company_ids

@@ -102,6 +102,26 @@ enviado?" são sempre re-derivados do banco (`CampaignRun.started_at`) e do
 `audit_log` (`daily_digest_sent`). Matar e religar o processo no meio do
 dia nunca duplica um disparo nem perde o controle do que já foi feito.
 
+## Retry de jobs presos (post-Fase-9, todo tenant, independente do digest)
+
+Achado real durante a validação da Fase 9 (aconteceu duas vezes, com
+empresas reais): quando um handler de job (`business_analysis.py`,
+`website_analysis.py`, etc.) captura um erro da IA e marca o job
+`RETRYING`, ele nunca deixa a exceção subir pro RQ — então a fila sempre
+acha que o job "terminou com sucesso" (é por isso que o log mostra
+"Successfully completed" mesmo quando a análise falhou por dentro), e o
+retry nativo do RQ nunca dispara. Sem esse `scheduler.py`, um job marcado
+`RETRYING` ficava preso pra sempre até alguém notar e reprocessar na mão.
+
+Agora, a cada tick, o `scheduler.py` varre jobs `RETRYING` de **todos os
+tenants** (não só o `DAILY_DISCOVERY_TENANT_ID`) e reenfileira, até um
+limite de 3 tentativas (`Job.attempts`, já existia) — depois disso vira
+`FAILED` de verdade, nunca fica em limbo silencioso. Isso roda mesmo que a
+automação de descoberta diária esteja desligada — é uma questão de
+confiabilidade geral do pipeline, não uma feature do digest. Validado de
+verdade contra o banco real (job sintético RETRYING → reenfileirado
+corretamente; job no limite de tentativas → virou FAILED corretamente).
+
 ## Limitação conhecida (aceita, não corrigida — escopo de piloto)
 
 Se o processo cair exatamente entre criar o `CampaignRun` e enfileirar o

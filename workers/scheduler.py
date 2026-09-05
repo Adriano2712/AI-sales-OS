@@ -1,11 +1,16 @@
-"""Daily scheduled discovery + digest email.
+"""Daily scheduled discovery + digest email, and a stuck-job retry sweep.
 
-A separate, optional 4th local process (alongside API + worker + web) —
-start it only when you want the automation active (see
-docs/DAILY_DIGEST.md). Stateless across restarts: every tick re-derives
-what's due from the database and audit_log, never from in-memory state, so
-killing and restarting this process never double-sends a digest or loses
-track of "did today's run happen yet."
+A separate, optional 4th local process (alongside API + worker + web).
+Two independent jobs share this loop:
+  1. Daily discovery/digest — only if DAILY_DISCOVERY_TENANT_ID is set (see
+     docs/DAILY_DIGEST.md).
+  2. Retrying jobs stuck RETRYING (see _RETRYABLE_JOB_HANDLERS below) —
+     runs for every tenant regardless of (1), since job-retry reliability
+     isn't specific to the daily-digest feature.
+Stateless across restarts: every tick re-derives what's due from the
+database and audit_log, never from in-memory state, so killing and
+restarting this process never double-sends a digest, re-retries a job past
+its attempt cap, or loses track of "did today's run happen yet."
 
 Usage:
     apps/api/.venv/Scripts/python workers/scheduler.py
@@ -36,9 +41,10 @@ from app.modules.campaigns.schemas import CampaignCreate, CampaignUpdate  # noqa
 from app.modules.campaigns.service import create_campaign, create_run, update_campaign  # noqa: E402
 from app.modules.companies.models import Company  # noqa: E402
 from app.modules.discovery.base import NATIONWIDE_CITY_SENTINEL  # noqa: E402
-from app.modules.jobs.enums import JobType  # noqa: E402
+from app.modules.jobs.enums import JobStatus, JobType  # noqa: E402
+from app.modules.jobs.models import Job  # noqa: E402
 from app.modules.jobs.queue import get_queue  # noqa: E402
-from app.modules.jobs.service import get_or_create_job  # noqa: E402
+from app.modules.jobs.service import get_or_create_job, mark_failed  # noqa: E402
 from app.modules.notifications.digest import (  # noqa: E402
     DigestCompanyEntry,
     build_digest_html,
@@ -53,6 +59,7 @@ from app.modules.notifications.site_digest import (  # noqa: E402
     build_site_digest_text,
 )
 from app.modules.opportunities.models import Opportunity  # noqa: E402
+from app.modules.tenancy.models import Tenant  # noqa: E402
 from app.modules.website_analysis.service import (  # noqa: E402
     get_latest_analysis as get_latest_website_analysis,
 )
@@ -67,6 +74,28 @@ _DAILY_TARGET_QUANTITY = 5
 _CHECK_INTERVAL_SECONDS = 900  # 15 min
 _DIGEST_DELAY = timedelta(minutes=30)
 _CAMPAIGN_NAME_PREFIX = "Descoberta Diária (auto)"
+
+# Real infra gap this closes (found during Fase 9 real validation runs,
+# twice): every job handler catches its own AI/schema errors and calls
+# mark_failed() internally rather than letting the exception propagate to
+# RQ — so RQ always sees a "successful" job run even when the business
+# logic inside actually failed, and RQ's own retry mechanism never
+# triggers. A job marked RETRYING therefore sat there forever until a
+# human noticed and manually reset it. Each entry maps a retryable JobType
+# to (its RQ task path, the ordered payload keys its run() needs after
+# job_id/tenant_id) — every handler's payload already carries exactly what
+# its own run() signature needs (see jobs/handlers/*.py).
+_MAX_JOB_ATTEMPTS = 3
+_RETRYABLE_JOB_HANDLERS: dict[JobType, tuple[str, list[str]]] = {
+    JobType.DISCOVERY: ("app.modules.jobs.handlers.discovery.run", ["campaign_run_id"]),
+    JobType.WEBSITE_ANALYSIS: ("app.modules.jobs.handlers.website_analysis.run", ["company_id"]),
+    JobType.BUSINESS_ANALYSIS: ("app.modules.jobs.handlers.business_analysis.run", ["company_id"]),
+    JobType.SCORING: ("app.modules.jobs.handlers.scoring.run", ["company_id"]),
+    JobType.MESSAGE_GENERATION: (
+        "app.modules.jobs.handlers.message_generation.run",
+        ["opportunity_id", "channel"],
+    ),
+}
 
 
 def _today_segment() -> str:
@@ -309,6 +338,70 @@ async def _maybe_send_pending_digests(db, tenant_id: uuid.UUID) -> None:
             await _send_site_diagnostic_for_run(db, tenant_id, run, campaign)
 
 
+async def _retry_stuck_jobs(db, tenant_id: uuid.UUID) -> None:
+    """The actual fix — see _RETRYABLE_JOB_HANDLERS' comment above for why
+    nothing else in the system ever revisits a RETRYING job on its own."""
+    await set_tenant_context(db, tenant_id)
+    result = await db.execute(
+        select(Job).where(Job.tenant_id == tenant_id, Job.status == JobStatus.RETRYING)
+    )
+    stuck_jobs = list(result.scalars())
+
+    for job in stuck_jobs:
+        await set_tenant_context(db, tenant_id)
+
+        if job.attempts >= _MAX_JOB_ATTEMPTS:
+            # Give up for real rather than leaving it RETRYING forever —
+            # FAILED is terminal and visible, not silent limbo.
+            await mark_failed(db, job, error=job.error or "max retries exceeded", retryable=False)
+            await db.commit()
+            logger.error(
+                "scheduler_job_gave_up",
+                job_id=str(job.id),
+                job_type=job.type.value,
+                attempts=job.attempts,
+            )
+            continue
+
+        handler = _RETRYABLE_JOB_HANDLERS.get(job.type)
+        if handler is None:
+            continue  # e.g. PING — not worth wiring up a retry path for
+        task_path, payload_keys = handler
+        try:
+            extra_args = [str(job.payload[key]) for key in payload_keys]
+        except KeyError:
+            logger.error(
+                "scheduler_retry_missing_payload", job_id=str(job.id), job_type=job.type.value
+            )
+            continue
+
+        job.status = JobStatus.PENDING
+        job.error = None
+        await db.flush()
+        await db.commit()
+        get_queue().enqueue(task_path, str(job.id), str(tenant_id), *extra_args)
+        logger.info(
+            "scheduler_retried_job", job_id=str(job.id), job_type=job.type.value, attempts=job.attempts
+        )
+
+
+async def _retry_stuck_jobs_all_tenants() -> None:
+    """Tenant-agnostic on purpose (unlike _tick, which only runs the daily
+    discovery/digest for one configured tenant) — job-retry reliability
+    isn't a feature of the daily-digest automation, it should apply
+    regardless of whether that's even configured."""
+    async with async_session_factory() as db:
+        result = await db.execute(select(Tenant.id))  # tenants table has no RLS
+        tenant_ids = [row[0] for row in result.all()]
+
+    for tenant_id in tenant_ids:
+        async with async_session_factory() as db:
+            try:
+                await _retry_stuck_jobs(db, tenant_id)
+            except Exception as exc:  # noqa: BLE001 - one tenant's failure must not skip the rest
+                logger.error("scheduler_retry_sweep_failed", tenant_id=str(tenant_id), error=str(exc))
+
+
 async def _tick(tenant_id: uuid.UUID) -> None:
     async with async_session_factory() as db:
         await set_tenant_context(db, tenant_id)
@@ -344,20 +437,30 @@ async def _tick(tenant_id: uuid.UUID) -> None:
 async def main() -> None:
     configure_logging()
     settings = get_settings()
-    if not settings.daily_discovery_tenant_id:
+    daily_tenant_id = (
+        uuid.UUID(settings.daily_discovery_tenant_id) if settings.daily_discovery_tenant_id else None
+    )
+    if daily_tenant_id is None:
         print(
-            "DAILY_DISCOVERY_TENANT_ID not set — nothing to do. "
+            "DAILY_DISCOVERY_TENANT_ID not set — daily discovery/digest is off, "
+            "but the stuck-job retry sweep below still runs for every tenant. "
             "See docs/DAILY_DIGEST.md."
         )
-        return
+    else:
+        logger.info("scheduler_started", tenant_id=str(daily_tenant_id))
 
-    tenant_id = uuid.UUID(settings.daily_discovery_tenant_id)
-    logger.info("scheduler_started", tenant_id=str(tenant_id))
     while True:
+        if daily_tenant_id is not None:
+            try:
+                await _tick(daily_tenant_id)
+            except Exception as exc:  # noqa: BLE001 - one bad tick must not kill the scheduler
+                logger.error("scheduler_tick_failed", error=str(exc))
+
         try:
-            await _tick(tenant_id)
-        except Exception as exc:  # noqa: BLE001 - one bad tick must not kill the scheduler
-            logger.error("scheduler_tick_failed", error=str(exc))
+            await _retry_stuck_jobs_all_tenants()
+        except Exception as exc:  # noqa: BLE001 - one bad sweep must not kill the scheduler
+            logger.error("scheduler_retry_sweep_failed", error=str(exc))
+
         await asyncio.sleep(_CHECK_INTERVAL_SECONDS)
 
 
