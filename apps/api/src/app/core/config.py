@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     """Which tenant the daily scheduled campaign runs for. Unset means the
     scheduler does nothing — there's no sane default tenant to guess."""
 
+    sender_company_name: str | None = None
+    sender_company_location: str | None = None
+    """Real identity of the software house sending outreach messages
+    (messages/ai_writer.py). Both optional — unset means the AI Writer stays
+    generic ("uma software house") rather than naming one. Added after a
+    real finding: without this, the model would improvise a fabricated
+    "daqui de [cidade do prospect]" line implying local presence that
+    doesn't exist (spec section 35 — never invent, including implicitly)."""
+
     cors_origins: list[str] = ["http://localhost:3000"]
 
 

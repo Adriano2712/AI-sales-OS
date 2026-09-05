@@ -5,6 +5,7 @@ from typing import cast
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.modules.ai_gateway.base import AIProvider
 from app.modules.ai_gateway.service import run_ai_task
 from app.modules.companies.models import Company
@@ -74,6 +75,7 @@ async def generate_message(
     if existing is not None:
         return existing
 
+    settings = get_settings()
     ai_request = build_ai_request(
         company_name=company.name,
         segment=company.segment,
@@ -81,6 +83,8 @@ async def generate_message(
         problem=opportunity.problem,
         potential_solution=opportunity.potential_solution,
         reasons=opportunity.reasons,
+        sender_name=settings.sender_company_name,
+        sender_location=settings.sender_company_location,
     )
     ai_response = await run_ai_task(db, ai_provider, tenant_id, ai_request)
     output = cast(MessageAIOutput, ai_response.output)

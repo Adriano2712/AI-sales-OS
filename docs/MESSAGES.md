@@ -72,6 +72,17 @@ Regra do prompt, direto da spec seção 48: nunca inventar cliente, resultado,
 funcionalidade ou informação pessoal; se a evidência for fraca, manter a
 mensagem genérica e honesta em vez de parecer mais informado do que é.
 
+**Real finding**: sem uma identidade real de remetente, o modelo improvisava
+sozinho uma linha tipo "somos uma software house **daqui de Salvador**" /
+"**daqui de Natal**" — inventando presença local que não existe (violação
+silenciosa da regra de nunca inventar, só percebida ao ler mensagens reais
+já geradas). Corrigido com `SENDER_COMPANY_NAME`/`SENDER_COMPANY_LOCATION`
+(opcionais — sem eles, a mensagem fica genérica, "uma software house", sem
+inventar local nenhum) passados como fato fixo pro prompt, que agora proíbe
+explicitamente afirmar presença local no lugar do prospect. Trabalho remoto
+é normal nesse setor — o prompt instrui a nunca pedir desculpa pela
+distância nem escondê-la.
+
 ## Sem envio automático (spec seção 47/49)
 
 Nenhuma integração real com WhatsApp/email/LinkedIn. "Marcar como enviada"
