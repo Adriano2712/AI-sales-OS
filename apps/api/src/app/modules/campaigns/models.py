@@ -30,6 +30,13 @@ class Campaign(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     # — the AI falls back to a generic software-house service list when this
     # is empty, exactly like it already did before this field existed.
     services: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    # Fase 7 (Opportunity Score 2.0) — a campaign-level override of
+    # opportunities/scoring.py's DEFAULT_WEIGHTS_V2. Nullable/None means
+    # "use the system defaults", not "zero out every factor" — see
+    # opportunities/schemas.py::OpportunityWeights.to_weights_dict(), which
+    # merges whatever's set here over the defaults rather than replacing
+    # them wholesale.
+    opportunity_weights: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[CampaignStatus] = mapped_column(
         Enum(CampaignStatus, name="campaign_status"), default=CampaignStatus.DRAFT
     )

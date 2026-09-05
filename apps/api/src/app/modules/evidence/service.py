@@ -77,3 +77,42 @@ async def list_evidence_for_company(
         .order_by(Evidence.collected_at.desc())
     )
     return list(result.scalars())
+
+
+# Fase 7 (Opportunity Score 2.0): how much a single piece of evidence
+# should count toward the aggregate signal balance below. UNKNOWN
+# contributes nothing — the Opportunity Signal's absolute rule (Fase 3)
+# extended to aggregation: absence of evidence must never tip the balance
+# either way, not even by NEUTRAL/UNKNOWN evidence "diluting" the mix.
+_POLARITY_CONFIDENCE_WEIGHT: dict[EvidenceConfidence, float] = {
+    EvidenceConfidence.HIGH: 1.0,
+    EvidenceConfidence.MEDIUM: 0.6,
+    EvidenceConfidence.LOW: 0.3,
+    EvidenceConfidence.UNKNOWN: 0.0,
+}
+
+
+def compute_signal_balance(evidence_list: list[Evidence]) -> float | None:
+    """Pure — confidence-weighted balance of POSITIVE vs NEGATIVE opportunity
+    signals for a company, scaled 0-100 (100 = every signal is confidently
+    POSITIVE, 0 = every signal is confidently NEGATIVE). NEUTRAL and UNKNOWN
+    evidence never contribute — only claims this system itself already
+    classified as POSITIVE/NEGATIVE opportunity signals count, weighted by
+    how confidently each was observed. Returns None (excluded from whatever
+    weighted average consumes this, never a fabricated midpoint) when there
+    is no confidently-polarized evidence at all — same renormalize-over-
+    known-dimensions discipline as every other score in this project."""
+    positive = sum(
+        _POLARITY_CONFIDENCE_WEIGHT[e.confidence]
+        for e in evidence_list
+        if e.polarity == EvidencePolarity.POSITIVE
+    )
+    negative = sum(
+        _POLARITY_CONFIDENCE_WEIGHT[e.confidence]
+        for e in evidence_list
+        if e.polarity == EvidencePolarity.NEGATIVE
+    )
+    total = positive + negative
+    if total == 0:
+        return None
+    return round(100.0 * positive / total, 1)

@@ -40,9 +40,17 @@ class Opportunity(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     need: Mapped[float | None] = mapped_column(Float, nullable=True)
     commercial_signals: Mapped[float | None] = mapped_column(Float, nullable=True)
     opportunity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    # Score != confidence (spec section 42) — carried straight through from
-    # BusinessAnalysis.confidence, never blended into opportunity_score itself.
+    # Score != confidence (spec section 42). Fase 7 (Opportunity Score 2.0):
+    # OPPORTUNITY_CONFIDENCE, blending BusinessAnalysis.confidence with how
+    # complete the factor set behind opportunity_score actually was — see
+    # opportunities/scoring.py::compute_opportunity_confidence. No longer a
+    # naive pass-through of BusinessAnalysis.confidence (its pre-Fase-7
+    # behavior).
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Fase 7: full breakdown behind opportunity_score/confidence (per-factor
+    # values, weights actually used, penalty points/reasons) — transparency/
+    # debugging, never itself read back into scoring.
+    score_components: Mapped[dict] = mapped_column(JSON, default=dict)
     classification: Mapped[OpportunityClassification | None] = mapped_column(
         Enum(OpportunityClassification, name="opportunity_classification"), nullable=True
     )

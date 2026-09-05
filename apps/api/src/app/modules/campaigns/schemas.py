@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.campaigns.enums import CampaignRunStatus, CampaignStatus
+from app.modules.opportunities.schemas import OpportunityWeights
 
 
 class CampaignCreate(BaseModel):
@@ -15,6 +16,8 @@ class CampaignCreate(BaseModel):
     target_quantity: int = Field(gt=0)
     filters: dict = Field(default_factory=dict)
     services: list[str] = Field(default_factory=list)
+    # Fase 7 — None means "use opportunities/scoring.py's system defaults".
+    opportunity_weights: OpportunityWeights | None = None
 
 
 class CampaignUpdate(BaseModel):
@@ -25,6 +28,7 @@ class CampaignUpdate(BaseModel):
     target_quantity: int | None = Field(default=None, gt=0)
     filters: dict | None = None
     services: list[str] | None = None
+    opportunity_weights: OpportunityWeights | None = None
     status: CampaignStatus | None = None
 
 
@@ -41,6 +45,7 @@ class CampaignRead(BaseModel):
     target_quantity: int
     filters: dict
     services: list[str]
+    opportunity_weights: OpportunityWeights | None
     status: CampaignStatus
     created_at: datetime
     updated_at: datetime
