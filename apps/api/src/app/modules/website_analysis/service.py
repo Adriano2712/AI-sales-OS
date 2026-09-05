@@ -8,15 +8,43 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.ai_gateway.router import ProviderNotConfigured
 from app.modules.ai_gateway.service import run_ai_task_routed
 from app.modules.companies.models import Company
+from app.modules.evidence.enums import EvidenceCategory, EvidenceConfidence, EvidencePolarity
+from app.modules.evidence.service import get_or_create_evidence
 from app.modules.website_analysis.ai_diagnostic import SiteDiagnosticAIOutput
 from app.modules.website_analysis.ai_diagnostic import build_ai_request as build_diagnostic_request
 from app.modules.website_analysis.crawler import WebsiteCrawler
+from app.modules.website_analysis.enums import WebsiteStatus
 from app.modules.website_analysis.models import Website, WebsiteAnalysis, WebsitePage
 from app.modules.website_analysis.scoring import (
     compute_digital_score,
+    compute_opportunity_score,
     compute_sub_scores,
     derive_problems,
 )
+from app.modules.website_analysis.status import CONFIDENT_QUALITY_STATUSES, derive_website_status
+
+# Fase 5 Opportunity Signal classification for each WebsiteStatus — mirrors
+# enrichment/service.py's _SUPPLEMENTARY_FIELD_SIGNAL pattern. BLOCKED/
+# TIMEOUT/JS_REQUIRED/UNKNOWN are the absolute rule in table form: none of
+# them are a real read on the site, so none of them get anything but
+# UNKNOWN/UNKNOWN. GOOD is NEGATIVE (less room for us to help — spec's own
+# "site moderno adequado" negative example); everything else that IS a real
+# gap (OFFLINE/WEBSITE_NOT_FOUND/POOR/NEEDS_IMPROVEMENT — no working site is
+# itself an opportunity, per spec's "sem site" positive example) is
+# POSITIVE. ANALYZED is a genuine middle state — some real data, not enough
+# to grade — so it's NEUTRAL, not confidently either way.
+_STATUS_SIGNAL: dict[WebsiteStatus, tuple[EvidenceConfidence, EvidencePolarity]] = {
+    WebsiteStatus.WEBSITE_NOT_FOUND: (EvidenceConfidence.HIGH, EvidencePolarity.POSITIVE),
+    WebsiteStatus.OFFLINE: (EvidenceConfidence.HIGH, EvidencePolarity.POSITIVE),
+    WebsiteStatus.POOR: (EvidenceConfidence.HIGH, EvidencePolarity.POSITIVE),
+    WebsiteStatus.NEEDS_IMPROVEMENT: (EvidenceConfidence.HIGH, EvidencePolarity.POSITIVE),
+    WebsiteStatus.GOOD: (EvidenceConfidence.HIGH, EvidencePolarity.NEGATIVE),
+    WebsiteStatus.ANALYZED: (EvidenceConfidence.MEDIUM, EvidencePolarity.NEUTRAL),
+    WebsiteStatus.BLOCKED: (EvidenceConfidence.UNKNOWN, EvidencePolarity.UNKNOWN),
+    WebsiteStatus.TIMEOUT: (EvidenceConfidence.UNKNOWN, EvidencePolarity.UNKNOWN),
+    WebsiteStatus.JS_REQUIRED: (EvidenceConfidence.UNKNOWN, EvidencePolarity.UNKNOWN),
+    WebsiteStatus.UNKNOWN: (EvidenceConfidence.UNKNOWN, EvidencePolarity.UNKNOWN),
+}
 
 
 async def get_or_create_website(
@@ -87,8 +115,37 @@ async def analyze_website(
             company.email = found_email
 
     sub_scores = compute_sub_scores(pages)
-    digital_score = compute_digital_score(sub_scores)
-    problems = derive_problems(pages)
+    raw_quality_score = compute_digital_score(sub_scores)
+    status = derive_website_status(pages, sub_scores, raw_quality_score)
+
+    # The absolute rule, closed at the score level too: compute_sub_scores
+    # can still mechanically produce a low-but-real-looking number from a
+    # JS-only shell's near-empty HTML (or similar partial data) even though
+    # status already says "we didn't really see this site" — never let that
+    # number leak out and silently contradict the status (a real bug caught
+    # in this phase's own end-to-end validation, not by a unit test: see
+    # docs/WEBSITE_ANALYSIS.md's Fase 5 section).
+    if status in CONFIDENT_QUALITY_STATUSES:
+        digital_score = raw_quality_score
+        opportunity_score = compute_opportunity_score(sub_scores)
+    else:
+        digital_score = None
+        opportunity_score = None
+    problems = derive_problems(pages, status)
+
+    status_confidence, status_polarity = _STATUS_SIGNAL[status]
+    await get_or_create_evidence(
+        db,
+        tenant_id,
+        company.id,
+        claim=f"Website status: {status.value}",
+        source="website_analysis",
+        confidence=status_confidence,
+        polarity=status_polarity,
+        category=EvidenceCategory.WEBSITE_QUALITY,
+        source_url=website.url,
+        supporting_data={"field": "website_status", "status": status.value},
+    )
 
     ai_diagnostic: str | None = None
     # Cost control (spec section 39): only spend on a paragraph when the
@@ -117,7 +174,9 @@ async def analyze_website(
     analysis = WebsiteAnalysis(
         tenant_id=tenant_id,
         website_id=website.id,
+        status=status,
         digital_score=digital_score,
+        opportunity_score=opportunity_score,
         score_funcionamento=sub_scores.funcionamento,
         score_mobile=sub_scores.mobile,
         score_ux=sub_scores.ux,
@@ -127,6 +186,7 @@ async def analyze_website(
         findings={
             "pages_crawled": len(pages),
             "pages": [{"url": p.url, "type": p.page_type.value, "status": p.http_status} for p in pages],
+            "status": status.value,
             "problems": problems,
             "ai_diagnostic": ai_diagnostic,
         },

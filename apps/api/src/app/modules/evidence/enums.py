@@ -37,11 +37,15 @@ class EvidenceCategory(str, enum.Enum):
     CUSTOMER_VALIDATION for Google review data (rating/review count) — real
     third-party proof the business is active and has customers, distinct
     from SOCIAL_PRESENCE (a channel existing) or CONTACTABILITY (a way to
-    reach them)."""
+    reach them). Extended again in Fase 5 with WEBSITE_QUALITY for the
+    company's own website's technical/UX status — distinct from
+    CONTACTABILITY (whether the site exists as a way to reach them) and
+    BUSINESS_ANALYSIS (the AI Analyst's own prose findings)."""
 
     CONTACTABILITY = "CONTACTABILITY"
     SOCIAL_PRESENCE = "SOCIAL_PRESENCE"
     BUSINESS_STATUS = "BUSINESS_STATUS"
     BUSINESS_ANALYSIS = "BUSINESS_ANALYSIS"
     CUSTOMER_VALIDATION = "CUSTOMER_VALIDATION"
+    WEBSITE_QUALITY = "WEBSITE_QUALITY"
     OTHER = "OTHER"

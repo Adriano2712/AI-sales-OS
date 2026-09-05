@@ -1,6 +1,7 @@
-from app.modules.website_analysis.enums import PageType
+from app.modules.website_analysis.enums import PageType, WebsiteStatus
 from app.modules.website_analysis.scoring import (
     compute_digital_score,
+    compute_opportunity_score,
     compute_sub_scores,
     derive_problems,
 )
@@ -34,20 +35,26 @@ def test_no_pages_yields_all_none():
     assert compute_digital_score(scores) is None
 
 
-def test_unreachable_homepage_only_funcionamento_is_evaluable():
+def test_unreachable_homepage_yields_all_none_not_a_zero_score():
+    """Fase 5 fix: an unreachable homepage used to score funcionamento=0.0
+    (0 of 1 pages responded), which single-handedly dragged digital_score to
+    0.0 — a fetch failure being scored as literally the worst possible
+    quality, which is exactly what the Fase 5 absolute rule forbids (see
+    status.py's derive_website_status, which classifies *why* separately).
+    Confirmed as a live bug against this project's own real data before this
+    fix (see database/migrations/versions/0016_website_status.py)."""
     pages = [
         PageSignals(url="https://example.com/", page_type=PageType.HOMEPAGE, http_status=None)
     ]
     scores = compute_sub_scores(pages)
-    assert scores.funcionamento == 0.0
+    assert scores.funcionamento is None
     assert scores.mobile is None
     assert scores.ux is None
     assert scores.conversao is None
     assert scores.conteudo is None
     assert scores.design is None
-    # Only funcionamento evaluated -> digital_score equals it exactly
-    # (weights renormalized over a single dimension).
-    assert compute_digital_score(scores) == 0.0
+    assert compute_digital_score(scores) is None
+    assert compute_opportunity_score(scores) is None
 
 
 def test_fully_healthy_site_scores_well_on_every_evaluable_dimension():
@@ -131,8 +138,26 @@ def test_digital_score_is_none_when_nothing_is_evaluable():
     assert compute_digital_score(scores) is None
 
 
+def test_opportunity_score_is_inverse_of_conversao():
+    from app.modules.website_analysis.scoring import SubScores
+
+    scores = SubScores(
+        funcionamento=100.0, mobile=100.0, ux=100.0, conversao=40.0, conteudo=100.0, design=100.0
+    )
+    assert compute_opportunity_score(scores) == 60.0
+
+
+def test_opportunity_score_is_none_when_conversao_not_evaluable():
+    from app.modules.website_analysis.scoring import SubScores
+
+    scores = SubScores(
+        funcionamento=100.0, mobile=100.0, ux=100.0, conversao=None, conteudo=100.0, design=100.0
+    )
+    assert compute_opportunity_score(scores) is None
+
+
 def test_derive_problems_no_pages_reports_inaccessible():
-    problems = derive_problems([])
+    problems = derive_problems([], WebsiteStatus.UNKNOWN)
     assert len(problems) == 1
     assert "não pôde ser acessado" in problems[0]
 
@@ -141,7 +166,7 @@ def test_derive_problems_unreachable_homepage_reports_only_that():
     pages = [
         PageSignals(url="https://example.com/", page_type=PageType.HOMEPAGE, http_status=500)
     ]
-    problems = derive_problems(pages)
+    problems = derive_problems(pages, WebsiteStatus.OFFLINE)
     assert len(problems) == 1
     assert "HTTP 500" in problems[0]
 
@@ -150,9 +175,43 @@ def test_derive_problems_unreachable_homepage_with_no_status_still_reports_one_p
     pages = [
         PageSignals(url="https://example.com/", page_type=PageType.HOMEPAGE, http_status=None)
     ]
-    problems = derive_problems(pages)
+    problems = derive_problems(pages, WebsiteStatus.OFFLINE)
     assert len(problems) == 1
     assert "fora do ar" in problems[0]
+
+
+def test_derive_problems_blocked_reports_anti_bot_message_not_a_quality_judgment():
+    """The Fase 5 absolute rule, at the message-text level: a 403/anti-bot
+    block must never read as "this is a bad site"."""
+    pages = [
+        PageSignals(url="https://example.com/", page_type=PageType.HOMEPAGE, http_status=403)
+    ]
+    problems = derive_problems(pages, WebsiteStatus.BLOCKED)
+    assert len(problems) == 1
+    assert "bloqueio automático" in problems[0]
+    assert "fora do ar" not in problems[0]
+
+
+def test_derive_problems_timeout_does_not_say_site_is_down():
+    problems = derive_problems([], WebsiteStatus.TIMEOUT)
+    assert len(problems) == 1
+    assert "demorou" in problems[0]
+    assert "fora do ar" not in problems[0]
+
+
+def test_derive_problems_website_not_found_reports_domain_issue():
+    problems = derive_problems([], WebsiteStatus.WEBSITE_NOT_FOUND)
+    assert len(problems) == 1
+    assert "domínio" in problems[0]
+
+
+def test_derive_problems_js_required_does_not_say_content_is_thin():
+    """A JS-only SPA's near-empty static HTML must not be reported as
+    thin/raw content — we simply couldn't see the real content."""
+    problems = derive_problems([], WebsiteStatus.JS_REQUIRED)
+    assert len(problems) == 1
+    assert "JavaScript" in problems[0]
+    assert "raso" not in problems[0]
 
 
 def test_derive_problems_healthy_site_with_services_page_has_no_problems():
@@ -160,7 +219,7 @@ def test_derive_problems_healthy_site_with_services_page_has_no_problems():
         _homepage(),
         PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
     ]
-    assert derive_problems(pages) == []
+    assert derive_problems(pages, WebsiteStatus.GOOD) == []
 
 
 def test_derive_problems_flags_missing_viewport():
@@ -168,7 +227,7 @@ def test_derive_problems_flags_missing_viewport():
         _homepage(has_viewport_meta=False),
         PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
     ]
-    problems = derive_problems(pages)
+    problems = derive_problems(pages, WebsiteStatus.NEEDS_IMPROVEMENT)
     assert any("celular" in p for p in problems)
 
 
@@ -177,7 +236,7 @@ def test_derive_problems_flags_no_contact_method():
         _homepage(has_contact_form=False, has_phone_link=False, has_email_link=False, has_whatsapp_link=False),
         PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
     ]
-    problems = derive_problems(pages)
+    problems = derive_problems(pages, WebsiteStatus.NEEDS_IMPROVEMENT)
     assert any("contato" in p for p in problems)
 
 
@@ -187,7 +246,7 @@ def test_derive_problems_contact_page_alone_counts_as_a_contact_method():
         PageSignals(url="https://example.com/contato", page_type=PageType.CONTACT, http_status=200),
         PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
     ]
-    problems = derive_problems(pages)
+    problems = derive_problems(pages, WebsiteStatus.GOOD)
     assert not any("contato" in p for p in problems)
 
 
@@ -196,13 +255,13 @@ def test_derive_problems_flags_missing_nav():
         _homepage(has_nav=False),
         PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
     ]
-    problems = derive_problems(pages)
+    problems = derive_problems(pages, WebsiteStatus.NEEDS_IMPROVEMENT)
     assert any("navegação" in p for p in problems)
 
 
 def test_derive_problems_flags_no_services_page():
     pages = [_homepage()]
-    problems = derive_problems(pages)
+    problems = derive_problems(pages, WebsiteStatus.NEEDS_IMPROVEMENT)
     assert any("serviços" in p for p in problems)
 
 
@@ -211,7 +270,7 @@ def test_derive_problems_flags_missing_title_or_description():
         _homepage(title=None),
         PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
     ]
-    problems = derive_problems(pages)
+    problems = derive_problems(pages, WebsiteStatus.NEEDS_IMPROVEMENT)
     assert any("SEO" in p for p in problems)
 
 
@@ -220,5 +279,5 @@ def test_derive_problems_flags_thin_content():
         _homepage(word_count=10),
         PageSignals(url="https://example.com/servicos", page_type=PageType.SERVICES, http_status=200),
     ]
-    problems = derive_problems(pages)
+    problems = derive_problems(pages, WebsiteStatus.NEEDS_IMPROVEMENT)
     assert any("raso" in p for p in problems)

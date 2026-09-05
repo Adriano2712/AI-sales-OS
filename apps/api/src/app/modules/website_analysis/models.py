@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, TenantScopedMixin, TimestampMixin, UUIDPkMixin
-from app.modules.website_analysis.enums import PageType
+from app.modules.website_analysis.enums import PageType, WebsiteStatus
 
 
 class Website(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
@@ -64,6 +64,9 @@ class WebsiteAnalysis(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     website_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("websites.id", ondelete="CASCADE"), index=True
     )
+    # Fase 5: WEBSITE_QUALITY_SCORE from the master spec — this is
+    # `digital_score`, kept under its original name (business_analysis/
+    # scoring.py already depends on it) rather than renamed.
     digital_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     score_funcionamento: Mapped[float | None] = mapped_column(Float, nullable=True)
     score_mobile: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -71,5 +74,14 @@ class WebsiteAnalysis(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     score_conversao: Mapped[float | None] = mapped_column(Float, nullable=True)
     score_conteudo: Mapped[float | None] = mapped_column(Float, nullable=True)
     score_design: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Fase 5: WEBSITE_OPPORTUNITY_SCORE — deliberately separate from
+    # digital_score (see scoring.py's compute_opportunity_score). A site can
+    # be well-built yet convert poorly, or vice versa; a single blended
+    # number would hide that.
+    opportunity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Fase 5 — see enums.py's WebsiteStatus docstring for the absolute rule
+    # this exists to enforce (a fetch failure/anti-bot block/JS-only shell
+    # is never POOR).
+    status: Mapped[WebsiteStatus] = mapped_column(Enum(WebsiteStatus, name="website_status"))
     findings: Mapped[dict] = mapped_column(JSON, default=dict)
     analyzed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

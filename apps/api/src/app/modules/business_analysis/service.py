@@ -58,7 +58,9 @@ async def analyze_business(
     website_findings = None
     if website_analysis is not None:
         website_findings = {
+            "status": website_analysis.status.value,
             "digital_score": website_analysis.digital_score,
+            "opportunity_score": website_analysis.opportunity_score,
             "score_funcionamento": website_analysis.score_funcionamento,
             "score_mobile": website_analysis.score_mobile,
             "score_conversao": website_analysis.score_conversao,

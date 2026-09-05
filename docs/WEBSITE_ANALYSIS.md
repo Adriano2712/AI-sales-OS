@@ -1,6 +1,6 @@
 # Website Analysis
 
-**Status: built (Fase 4).**
+**Status: built (Fase 4), status/quality-vs-opportunity split added (Fase 5).**
 
 ```
 Company (has website) -> WEBSITE_ANALYSIS job -> WebsiteCrawler -> PageSignals
@@ -103,11 +103,95 @@ depois da correção. Teste de regressão em
   scored funcionamento=100, mobile=100, design=`UNKNOWN` (no stylesheet).
 - **Real production signal, unprompted**: running a live Campinas b2b_services
   discovery, one company's real website (`dextraining.com.br`) failed to load
-  entirely. The system correctly recorded `score_funcionamento=0`,
-  every other dimension `UNKNOWN`, `digital_score=0` — exactly the kind of
-  "this business has a real digital problem" signal the whole product exists
-  to surface (spec's central thesis), produced automatically end to end
-  through the real queue on the very first live company with a website.
+  entirely — a genuine, valuable signal ("this business has a real digital
+  problem"), produced automatically end to end through the real queue on the
+  very first live company with a website. **Superseded by Fase 5**: at the
+  time, this was recorded as `score_funcionamento=0`, `digital_score=0` — see
+  the Fase 5 section below for why that specific number was actually a bug,
+  not the signal it looked like.
+
+## Fase 5: WebsiteStatus + WEBSITE_QUALITY_SCORE vs WEBSITE_OPPORTUNITY_SCORE
+
+**The absolute rule**: a technical failure to observe the site (anti-bot
+block, timeout, DNS failure, a JS-only shell this crawler can't render) is
+never scored as a *bad* website — that's a business-quality judgment made
+from an absence of evidence, exactly what the Opportunity Signal's absolute
+rule (Fase 3) forbids. `WebsiteStatus` (`enums.py`) makes this a named,
+first-class value instead of an inference from `digital_score is None`:
+`WEBSITE_NOT_FOUND`, `OFFLINE`, `BLOCKED`, `JS_REQUIRED`, `TIMEOUT`,
+`UNKNOWN` (insufficient evidence, distinct reasons) vs. `ANALYZED`, `GOOD`,
+`NEEDS_IMPROVEMENT`, `POOR` (confidently graded from a real, rendered page).
+`status.py`'s `derive_website_status` is the one place this gets decided.
+
+**Real bug found and fixed**: `compute_sub_scores` used to compute
+`funcionamento` (and therefore `digital_score`) as `0.0` whenever the
+homepage was unreachable — 0% of pages responded, so 0.0 was mechanically
+correct, but it then single-handedly determined the entire `digital_score`
+(100% of the renormalized weight, since every other dimension was already
+`None`). A blocked/timed-out/nonexistent site was being scored as literally
+the worst possible *quality*, indistinguishable from a real, rendered,
+truly terrible page — precisely the false equivalence the absolute rule
+forbids. Confirmed against this project's own real data before writing the
+fix: **11 of 39 real `website_analyses` rows had `digital_score=0.0`, and
+every single one was a fetch failure** (5 real HTTP 403s — a textbook
+anti-bot/WAF signal — plus 6 other connection/HTTP failures), never an
+actually-rendered bad page. Fixed in `compute_sub_scores`: an unreachable
+homepage now returns all six sub-scores as `None`. Migration `0016` fixed
+the 11 historical rows to match (reclassified 5 as `BLOCKED`, 6 as
+`OFFLINE`, `digital_score`/`score_funcionamento` nulled out on all 11).
+
+**A second instance of the same bug, caught by this phase's own end-to-end
+validation (not a unit test)**: a JS-only SPA shell's near-empty HTML still
+*has* a homepage that responds 200 — `compute_sub_scores` has no way to
+know the real content only exists after JavaScript runs, so it still
+produced a real-looking low score (e.g. 33.9) even after the first fix.
+`derive_website_status` correctly flagged `JS_REQUIRED`, but nothing yet
+stopped `digital_score` itself from silently contradicting that status (and
+the AI diagnostic call would still fire, spending money to explain a
+fabricated number). Fixed in `service.py`: `digital_score`/
+`opportunity_score` are only kept when `status` is in
+`status.CONFIDENT_QUALITY_STATUSES` (`GOOD`/`NEEDS_IMPROVEMENT`/`POOR`/
+`ANALYZED`) — every other status nulls both back out, regardless of what
+`compute_sub_scores` mechanically produced. Regression-tested in
+`tests/unit/test_website_status.py::test_js_required_is_not_in_confident_quality_statuses`
+and `tests/integration/test_website_analysis_job.py::test_js_only_shell_never_leaks_a_real_quality_score`.
+
+**WEBSITE_OPPORTUNITY_SCORE, distinct from WEBSITE_QUALITY_SCORE**:
+`digital_score` (kept under its original name — `business_analysis/
+scoring.py` already depends on it) is the site's overall technical/UX
+quality. `opportunity_score` (`compute_opportunity_score`) is new and
+deliberately narrower: `100 - score_conversao`, the inverse of just the
+contact/CTA dimension. A well-built, fast site can still convert poorly
+(spec's own positive examples: "CTA fraca", "sem WhatsApp") — a single
+blended quality number would dilute exactly that signal. Only computed
+when `score_conversao` itself was evaluable, so it inherits the same
+absence-handling as `digital_score`.
+
+**Evidence emission, direct (new — Fase 4 never called `get_or_create_evidence`
+from this module at all)**: `analyze_website` now records a
+`"Website status: {status}"` claim under the new `EvidenceCategory.
+WEBSITE_QUALITY`, classified via `_STATUS_SIGNAL` in `service.py` — `GOOD`
+is `NEGATIVE` (less room for us — spec's "site moderno adequado" negative
+example), `OFFLINE`/`WEBSITE_NOT_FOUND`/`POOR`/`NEEDS_IMPROVEMENT` are
+`POSITIVE` (no working site, or a real gap, is itself an opportunity —
+spec's "sem site" positive example), `ANALYZED` is `NEUTRAL` (some real
+data, not enough to grade), and `BLOCKED`/`TIMEOUT`/`JS_REQUIRED`/`UNKNOWN`
+are `UNKNOWN`/`UNKNOWN` — the absolute rule in table form.
+
+**Anti-bot/timeout/DNS classification is real-evidence-based, never a
+guess**: `crawler.py`'s `_classify_response` only calls a response
+`BLOCKED` for a known anti-bot status code (403, 429) or a genuine
+Cloudflare-style challenge marker actually found in the response
+body/headers for a 503 — never merely because a request failed. DNS
+failure detection (`_is_dns_failure`) walks the exception's `__cause__`
+chain for a real `socket.gaierror` (a stable, cross-platform exception
+*type*), not a string match on an OS-specific error message.
+`JS_REQUIRED` detection (`signal_extraction._looks_js_rendered`) requires
+both a near-empty word count *and* a known SPA framework root marker
+(`id="root"`, `id="app"`, `id="__next"`, `ng-version=`) actually present in
+the fetched HTML — a thin static page with neither marker is still just
+thin content (a different, real, already-existing problem), never guessed
+as JS-required.
 
 ## Data model
 

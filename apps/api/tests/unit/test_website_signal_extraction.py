@@ -1,4 +1,4 @@
-from app.modules.website_analysis.enums import PageType
+from app.modules.website_analysis.enums import PageFetchOutcome, PageType
 from app.modules.website_analysis.signal_extraction import (
     classify_link,
     extract_links,
@@ -143,3 +143,41 @@ def test_prioritize_links_respects_limit():
     links = extract_links(_LINKS_HTML, "https://example.com/", "example.com")
     prioritized = prioritize_links(links, limit=1)
     assert len(prioritized) == 1
+
+
+def test_fetch_outcome_defaults_to_responded():
+    signals = extract_page_signals(_FULL_PAGE_HTML, PageType.HOMEPAGE, 200)
+    assert signals.fetch_outcome == PageFetchOutcome.RESPONDED
+
+
+def test_fetch_outcome_is_passed_through():
+    signals = extract_page_signals(
+        _FULL_PAGE_HTML, PageType.HOMEPAGE, 200, fetch_outcome=PageFetchOutcome.BLOCKED
+    )
+    assert signals.fetch_outcome == PageFetchOutcome.BLOCKED
+
+
+def test_react_root_marker_with_near_empty_content_looks_js_rendered():
+    html = '<html><body><div id="root"></div><script src="/bundle.js"></script></body></html>'
+    signals = extract_page_signals(html, PageType.HOMEPAGE, 200)
+    assert signals.looks_js_rendered is True
+
+
+def test_react_root_marker_with_real_content_is_not_js_rendered():
+    """The marker alone isn't enough — plenty of real sites use these
+    frameworks and still render server-side or pre-rendered content."""
+    html = (
+        '<html><body><div id="root"><p>'
+        + ("conteudo real " * 30)
+        + "</p></div></body></html>"
+    )
+    signals = extract_page_signals(html, PageType.HOMEPAGE, 200)
+    assert signals.looks_js_rendered is False
+
+
+def test_near_empty_page_without_spa_marker_is_not_js_rendered():
+    """Thin content with no framework marker is just thin content (a
+    different, real problem) — never guessed as JS-required."""
+    html = "<html><body><p>Oi</p></body></html>"
+    signals = extract_page_signals(html, PageType.HOMEPAGE, 200)
+    assert signals.looks_js_rendered is False

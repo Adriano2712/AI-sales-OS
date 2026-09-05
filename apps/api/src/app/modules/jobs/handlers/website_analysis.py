@@ -47,7 +47,11 @@ async def _run(job_id: str, tenant_id: str, company_id: str) -> None:
             await set_tenant_context(db, tenant_uuid)
             job = await db.get(Job, job_uuid)
             if job is not None:
-                await mark_completed(db, job, result={"digital_score": analysis.digital_score})
+                await mark_completed(
+                    db,
+                    job,
+                    result={"digital_score": analysis.digital_score, "status": analysis.status.value},
+                )
                 await db.commit()
 
             # Chained here (not from the discovery job) because this is the

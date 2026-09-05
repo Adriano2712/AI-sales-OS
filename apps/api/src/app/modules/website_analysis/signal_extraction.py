@@ -4,7 +4,7 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
-from app.modules.website_analysis.enums import PageType
+from app.modules.website_analysis.enums import PageFetchOutcome, PageType
 
 
 @dataclass
@@ -37,6 +37,15 @@ class PageSignals:
     # only says one exists; this is what lets companies/models.py's `email`
     # actually get filled in (see website_analysis/service.py).
     email: str | None = None
+    # Fase 5. Set by the crawler (it's the only place with the raw
+    # httpx exception/response) — see crawler.py's _fetch. RESPONDED is a
+    # safe default for tests/callers that don't care about this dimension.
+    fetch_outcome: PageFetchOutcome = PageFetchOutcome.RESPONDED
+    # Fase 5: real, inspectable evidence (a known SPA framework root marker
+    # on an otherwise near-empty page) that this crawler likely can't see
+    # the real content without executing JavaScript — see
+    # _looks_js_rendered. Never set from a guess.
+    looks_js_rendered: bool = False
 
 
 def _as_str(value: str | list[str] | None) -> str:
@@ -77,12 +86,36 @@ def classify_link(href: str, text: str) -> PageType:
     return PageType.OTHER
 
 
-def extract_page_signals(html: str, page_type: PageType, http_status: int | None) -> PageSignals:
+# Common root-element markers left in the initial HTML shell by client-side
+# rendering frameworks before JavaScript runs — real, inspectable strings,
+# not a guess. Combined with a near-empty word count (see
+# _JS_REQUIRED_WORD_COUNT_THRESHOLD): a thin *static* page is still just
+# thin content (a different, real problem — see derive_problems), this is
+# specifically for "there's probably real content, but only after JS runs".
+_SPA_ROOT_MARKERS = ('id="root"', 'id="app"', 'id="__next"', "ng-version=")
+_JS_REQUIRED_WORD_COUNT_THRESHOLD = 15
+
+
+def _looks_js_rendered(html: str, word_count: int) -> bool:
+    if word_count >= _JS_REQUIRED_WORD_COUNT_THRESHOLD:
+        return False
+    lowered = html.lower()
+    return any(marker in lowered for marker in _SPA_ROOT_MARKERS)
+
+
+def extract_page_signals(
+    html: str,
+    page_type: PageType,
+    http_status: int | None,
+    fetch_outcome: PageFetchOutcome = PageFetchOutcome.RESPONDED,
+) -> PageSignals:
     """Pure — takes already-fetched HTML, no network. `url` is left blank;
     the caller (crawler) fills it in, since this function doesn't know the
     page's own address."""
     if not html:
-        return PageSignals(url="", page_type=page_type, http_status=http_status)
+        return PageSignals(
+            url="", page_type=page_type, http_status=http_status, fetch_outcome=fetch_outcome
+        )
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -112,6 +145,8 @@ def extract_page_signals(html: str, page_type: PageType, http_status: int | None
         # just the address itself.
         email = mailto_hrefs[0].removeprefix("mailto:").split("?")[0].strip() or None
 
+    word_count = len(soup.get_text().split())
+
     return PageSignals(
         url="",
         page_type=page_type,
@@ -125,8 +160,10 @@ def extract_page_signals(html: str, page_type: PageType, http_status: int | None
         has_whatsapp_link=has_whatsapp_link,
         has_nav=bool(soup.find("nav")),
         has_custom_stylesheet=bool(soup.find("link", attrs={"rel": "stylesheet"})),
-        word_count=len(soup.get_text().split()),
+        word_count=word_count,
         email=email,
+        fetch_outcome=fetch_outcome,
+        looks_js_rendered=_looks_js_rendered(html, word_count),
     )
 
 

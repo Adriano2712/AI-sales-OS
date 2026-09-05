@@ -1,8 +1,9 @@
+import socket
 from urllib.parse import urlparse
 
 import httpx
 
-from app.modules.website_analysis.enums import PageType
+from app.modules.website_analysis.enums import PageFetchOutcome, PageType
 from app.modules.website_analysis.signal_extraction import (
     PageSignals,
     extract_links,
@@ -14,6 +15,52 @@ from app.modules.website_analysis.signal_extraction import (
 # applicable to sites) — identify the client rather than sending a generic
 # HTTP-library default.
 _USER_AGENT = "ai-sales-os-website-analysis/0.1 (internal tool)"
+
+# Fase 5: real, well-known anti-bot/WAF status codes — 403 (forbidden,
+# overwhelmingly a WAF/bot-protection response for a benign crawler in
+# practice) and 429 (rate-limited, definitionally a protective mechanism,
+# never a "bad website" signal). 503 is only treated as a block when a
+# concrete challenge marker is also found (see _classify_response) — on its
+# own it's just as likely to be genuine maintenance.
+_ANTI_BOT_STATUS_CODES = (403, 429)
+_BOT_CHALLENGE_MARKERS = (
+    "checking your browser",
+    "attention required",
+    "just a moment",
+    "cf-browser-verification",
+    "captcha",
+)
+
+
+def _classify_response(response: httpx.Response) -> PageFetchOutcome:
+    """Real, inspectable evidence only — a known anti-bot status code, or a
+    challenge marker actually present in the response body/headers. Never a
+    guess from the mere fact that a page returned an error."""
+    if response.status_code in _ANTI_BOT_STATUS_CODES:
+        return PageFetchOutcome.BLOCKED
+    if response.status_code == 503:
+        server_header = response.headers.get("server", "").lower()
+        body_sample = response.text[:2000].lower()
+        if "cloudflare" in server_header or any(
+            marker in body_sample for marker in _BOT_CHALLENGE_MARKERS
+        ):
+            return PageFetchOutcome.BLOCKED
+    return PageFetchOutcome.RESPONDED
+
+
+def _is_dns_failure(exc: BaseException) -> bool:
+    """Walks the exception's __cause__ chain for a real socket.gaierror —
+    the actual OS-level DNS resolution failure. Checking the exception
+    *type* (stable across platforms) rather than matching on the message
+    string (which differs by OS) — real evidence, not an invented signal."""
+    current: BaseException | None = exc
+    for _ in range(5):
+        if isinstance(current, socket.gaierror):
+            return True
+        if current is None:
+            return False
+        current = current.__cause__
+    return False
 
 
 class WebsiteCrawler:
@@ -78,10 +125,34 @@ class WebsiteCrawler:
     ) -> tuple[PageSignals, str]:
         try:
             response = await client.get(url)
+        except httpx.TimeoutException as exc:
+            return PageSignals(
+                url=url,
+                page_type=page_type,
+                http_status=None,
+                error=str(exc),
+                fetch_outcome=PageFetchOutcome.TIMEOUT,
+            ), ""
+        except httpx.ConnectError as exc:
+            outcome = (
+                PageFetchOutcome.DNS_FAILURE
+                if _is_dns_failure(exc)
+                else PageFetchOutcome.CONNECTION_ERROR
+            )
+            return PageSignals(
+                url=url, page_type=page_type, http_status=None, error=str(exc), fetch_outcome=outcome
+            ), ""
         except httpx.HTTPError as exc:
-            return PageSignals(url=url, page_type=page_type, http_status=None, error=str(exc)), ""
+            return PageSignals(
+                url=url,
+                page_type=page_type,
+                http_status=None,
+                error=str(exc),
+                fetch_outcome=PageFetchOutcome.CONNECTION_ERROR,
+            ), ""
 
+        fetch_outcome = _classify_response(response)
         html = response.text if response.status_code < 400 else ""
-        signals = extract_page_signals(html, page_type, response.status_code)
+        signals = extract_page_signals(html, page_type, response.status_code, fetch_outcome=fetch_outcome)
         signals.url = url
         return signals, html
