@@ -2,7 +2,8 @@ import pytest
 from pydantic import BaseModel
 
 from app.modules.ai_gateway.base import AIProvider, AIProviderError, AIRequest, AIResponse
-from app.modules.ai_gateway.service import run_ai_task
+from app.modules.ai_gateway.router import TASK_FALLBACK, TASK_PROVIDER
+from app.modules.ai_gateway.service import run_ai_task, run_ai_task_routed
 
 
 class _EchoSchema(BaseModel):
@@ -80,3 +81,50 @@ async def test_failed_call_logs_error_and_reraises():
     logged = db.added[0]
     assert logged.status == "error"
     assert "provider exploded" in logged.error
+
+
+@pytest.mark.asyncio
+async def test_routed_call_uses_the_router_and_never_falls_back_when_none_is_configured(
+    monkeypatch,
+):
+    """Fase 2: the common case today — every existing task has no fallback
+    configured (spec section 19), so a failure must propagate, not silently
+    retry against a different, unvalidated model."""
+    import app.modules.ai_gateway.service as ai_gateway_service
+
+    monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", lambda task: _FailingProvider())
+    db = _FakeSession()
+
+    with pytest.raises(AIProviderError):
+        await run_ai_task_routed(db, tenant_id="00000000-0000-0000-0000-000000000000", request=_request())  # type: ignore[arg-type]
+
+    # Only the one (failed) attempt was logged — no silent second call.
+    assert len(db.added) == 1
+    assert db.added[0].status == "error"
+
+
+@pytest.mark.asyncio
+async def test_routed_call_falls_back_when_the_task_opts_in(monkeypatch):
+    import app.modules.ai_gateway.service as ai_gateway_service
+
+    monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", lambda task: _FailingProvider())
+    monkeypatch.setattr(
+        ai_gateway_service, "get_fallback_provider_for_task", lambda task: _SucceedingProvider()
+    )
+    db = _FakeSession()
+
+    response = await run_ai_task_routed(db, tenant_id="00000000-0000-0000-0000-000000000000", request=_request())  # type: ignore[arg-type]
+
+    assert response.output.text == "hello"
+    # Both attempts are visible in ai_calls — a fallback is observable, not hidden.
+    assert len(db.added) == 2
+    assert db.added[0].status == "error"
+    assert db.added[1].status == "success"
+
+
+def test_no_existing_task_has_fallback_configured_by_default():
+    """Guards the deliberate Fase 2 scope decision: fallback exists as a
+    mechanism, but is off for every task already in production until its
+    output quality on the other provider has been validated."""
+    for task in TASK_PROVIDER:
+        assert task not in TASK_FALLBACK

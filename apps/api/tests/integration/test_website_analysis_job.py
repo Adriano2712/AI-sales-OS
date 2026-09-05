@@ -122,8 +122,10 @@ async def test_website_analysis_job_creates_score_and_pages(app_session_factory,
 
         import app.modules.jobs.handlers.website_analysis as handler
 
-        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _FakeAIProvider())
-        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+        import app.modules.ai_gateway.service as ai_gateway_service
+
+        fake_router = lambda task: _FakeAIProvider()  # noqa: E731
+        monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
 
         await handler._run(str(job_id), str(tenant_id), str(company_id))
 
@@ -224,8 +226,10 @@ async def test_rerunning_analysis_replaces_pages_not_accumulates(
 
         import app.modules.jobs.handlers.website_analysis as handler
 
-        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _FakeAIProvider())
-        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+        import app.modules.ai_gateway.service as ai_gateway_service
+
+        fake_router = lambda task: _FakeAIProvider()  # noqa: E731
+        monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
 
         await handler._run(str(job_id), str(tenant_id), str(company_id))
         await handler._run(str(job_id), str(tenant_id), str(company_id))
@@ -335,8 +339,10 @@ async def test_down_site_gets_deterministic_problem_and_skips_ai_call(
 
         import app.modules.jobs.handlers.website_analysis as handler
 
-        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _CountingFakeProvider())
-        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+        import app.modules.ai_gateway.service as ai_gateway_service
+
+        fake_router = lambda task: _CountingFakeProvider()  # noqa: E731
+        monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
 
         await handler._run(str(job_id), str(tenant_id), str(company_id))
         assert call_count == 0  # AI never called for a fully down site
@@ -417,8 +423,13 @@ async def test_no_api_key_still_produces_deterministic_problems(app_session_fact
         )
 
         import app.modules.jobs.handlers.website_analysis as handler
+        from app.core.config import get_settings
 
-        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", None)
+        # No AnthropicProvider/get_provider_for_task mock here on purpose —
+        # this test wants the real Model Router to hit the real "no key
+        # configured" path (ProviderNotConfigured) and prove analyze_website
+        # degrades gracefully, not a mocked shortcut around it.
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", None)
 
         await handler._run(str(job_id), str(tenant_id), str(company_id))
 
@@ -501,8 +512,10 @@ async def test_crawl_never_overwrites_an_already_known_email(app_session_factory
 
         import app.modules.jobs.handlers.website_analysis as handler
 
-        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _FakeAIProvider())
-        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+        import app.modules.ai_gateway.service as ai_gateway_service
+
+        fake_router = lambda task: _FakeAIProvider()  # noqa: E731
+        monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
 
         await handler._run(str(job_id), str(tenant_id), str(company_id))
 

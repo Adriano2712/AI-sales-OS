@@ -5,8 +5,7 @@ from typing import cast
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.ai_gateway.base import AIProvider
-from app.modules.ai_gateway.service import run_ai_task
+from app.modules.ai_gateway.service import run_ai_task_routed
 from app.modules.business_analysis.ai_analyst import BusinessAnalysisAIOutput, build_ai_request
 from app.modules.business_analysis.models import BusinessAnalysis
 from app.modules.business_analysis.scoring import compute_deterministic_scores, compute_overall_score
@@ -32,7 +31,6 @@ async def analyze_business(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     company: Company,
-    ai_provider: AIProvider,
 ) -> BusinessAnalysis:
     """Cost control (spec section 39): skip the AI call entirely if this
     company was already analyzed. Re-analysis is a deliberate future action,
@@ -81,7 +79,7 @@ async def analyze_business(
         evidence_claims=evidence_claims,
     )
 
-    ai_response = await run_ai_task(db, ai_provider, tenant_id, ai_request)
+    ai_response = await run_ai_task_routed(db, tenant_id, ai_request)
     # AIResponse.output is typed as the generic base BaseModel (the gateway
     # is provider/task-agnostic) — safe to narrow here since we're the ones
     # who set output_schema=BusinessAnalysisAIOutput on the request above,

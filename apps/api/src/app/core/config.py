@@ -21,6 +21,13 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str | None = None
 
+    gemini_api_key: str | None = None
+    """Second AI provider (Fase 2 — Model Router). Optional, same
+    degrade-gracefully pattern as anthropic_api_key: a task routed to Gemini
+    without a key configured raises a clear error rather than silently
+    falling back, since fallback must be an explicit per-task choice (spec:
+    never fall back for a task incompatible with the other model)."""
+
     apify_api_token: str | None = None
     """Second discovery provider, alongside OSM/Overpass. Optional by
     design: discovery.py's job handler only adds ApifyProvider to its

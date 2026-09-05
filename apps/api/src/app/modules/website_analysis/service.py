@@ -5,8 +5,8 @@ from typing import cast
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.ai_gateway.base import AIProvider
-from app.modules.ai_gateway.service import run_ai_task
+from app.modules.ai_gateway.router import ProviderNotConfigured
+from app.modules.ai_gateway.service import run_ai_task_routed
 from app.modules.companies.models import Company
 from app.modules.website_analysis.ai_diagnostic import SiteDiagnosticAIOutput
 from app.modules.website_analysis.ai_diagnostic import build_ai_request as build_diagnostic_request
@@ -42,7 +42,6 @@ async def analyze_website(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     company: Company,
-    ai_provider: AIProvider | None = None,
     crawler: WebsiteCrawler | None = None,
 ) -> WebsiteAnalysis:
     website = await get_or_create_website(db, tenant_id, company)
@@ -95,18 +94,25 @@ async def analyze_website(
     # Cost control (spec section 39): only spend on a paragraph when the
     # homepage actually loaded — a fully down site is already self-
     # explanatory (see derive_problems), an AI paragraph would add cost
-    # without adding signal.
-    if ai_provider is not None and digital_score is not None:
+    # without adding signal. Unlike business_analysis/message_generation,
+    # a missing/unconfigured provider degrades gracefully here instead of
+    # aborting — the deterministic score/problems are the core feature and
+    # must never depend on AI being configured (see jobs/handlers/website_analysis.py).
+    if digital_score is not None:
         ai_request = build_diagnostic_request(
             company_name=company.name,
             segment=company.segment,
             digital_score=digital_score,
             problems=problems,
         )
-        ai_response = await run_ai_task(db, ai_provider, tenant_id, ai_request)
-        # Safe narrowing: we set output_schema=SiteDiagnosticAIOutput above,
-        # and the provider validates against exactly that schema.
-        ai_diagnostic = cast(SiteDiagnosticAIOutput, ai_response.output).business_impact
+        try:
+            ai_response = await run_ai_task_routed(db, tenant_id, ai_request)
+        except ProviderNotConfigured:
+            ai_diagnostic = None
+        else:
+            # Safe narrowing: we set output_schema=SiteDiagnosticAIOutput
+            # above, and the provider validates against exactly that schema.
+            ai_diagnostic = cast(SiteDiagnosticAIOutput, ai_response.output).business_impact
 
     analysis = WebsiteAnalysis(
         tenant_id=tenant_id,

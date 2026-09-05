@@ -89,10 +89,16 @@ async def test_business_analysis_job_creates_analysis_and_evidence(
             await session.commit()
             company_id, job_id = company.id, job.id
 
-        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _FakeAIProvider())
-        # Handler bails out early if no key configured — irrelevant since the
-        # provider itself is mocked, but keep it truthy so that guard passes.
-        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+        # Two seams to patch since Fase 2's Model Router: the handler's own
+        # preflight check (get_provider_for_task, imported directly), and
+        # the one ai_gateway.service.run_ai_task_routed actually calls to
+        # answer the request. Both must return the fake, or the preflight
+        # passes but a real Anthropic call still fires (or vice versa).
+        import app.modules.ai_gateway.service as ai_gateway_service
+
+        fake_router = lambda task: _FakeAIProvider()  # noqa: E731
+        monkeypatch.setattr(handler, "get_provider_for_task", fake_router)
+        monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
 
         await handler._run(str(job_id), str(tenant_id), str(company_id))
 
@@ -203,8 +209,11 @@ async def test_rerunning_business_analysis_does_not_call_ai_again(
             await session.commit()
             company_id, job1_id = company.id, job1.id
 
-        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _CountingFakeProvider())
-        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+        import app.modules.ai_gateway.service as ai_gateway_service
+
+        fake_router = lambda task: _CountingFakeProvider()  # noqa: E731
+        monkeypatch.setattr(handler, "get_provider_for_task", fake_router)
+        monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
 
         await handler._run(str(job1_id), str(tenant_id), str(company_id))
         assert call_count == 1

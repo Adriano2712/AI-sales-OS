@@ -1,9 +1,8 @@
 import uuid
 
-from app.core.config import get_settings
 from app.core.db import async_session_factory, set_tenant_context
 from app.core.logging import get_logger
-from app.modules.ai_gateway.anthropic_provider import AnthropicProvider
+from app.modules.ai_gateway.router import ProviderNotConfigured, get_provider_for_task
 from app.modules.audit.enums import AuditEventType
 from app.modules.audit.service import log_event
 from app.modules.companies.models import Company
@@ -23,11 +22,11 @@ async def _run(job_id: str, tenant_id: str, opportunity_id: str, channel: str, l
     opportunity_uuid = uuid.UUID(opportunity_id)
     channel_enum = MessageChannel(channel)
 
-    settings = get_settings()
-    if not settings.anthropic_api_key:
+    try:
+        get_provider_for_task("message_generation")
+    except ProviderNotConfigured:
         logger.error("message_generation_no_api_key", opportunity_id=opportunity_id)
         return
-    provider = AnthropicProvider(api_key=settings.anthropic_api_key)
 
     async with async_session_factory() as db:
         await set_tenant_context(db, tenant_uuid)
@@ -51,7 +50,7 @@ async def _run(job_id: str, tenant_id: str, opportunity_id: str, channel: str, l
         try:
             await set_tenant_context(db, tenant_uuid)
             message = await generate_message(
-                db, tenant_uuid, opportunity, company, channel_enum, provider, language=language
+                db, tenant_uuid, opportunity, company, channel_enum, language=language
             )
             await log_event(
                 db,

@@ -1,9 +1,8 @@
 import uuid
 
-from app.core.config import get_settings
 from app.core.db import async_session_factory, set_tenant_context
 from app.core.logging import get_logger
-from app.modules.ai_gateway.anthropic_provider import AnthropicProvider
+from app.modules.ai_gateway.router import ProviderNotConfigured, get_provider_for_task
 from app.modules.business_analysis.service import analyze_business
 from app.modules.companies.models import Company
 from app.modules.jobs.async_entrypoint import run_job_sync
@@ -20,11 +19,15 @@ async def _run(job_id: str, tenant_id: str, company_id: str) -> None:
     job_uuid = uuid.UUID(job_id)
     company_uuid = uuid.UUID(company_id)
 
-    settings = get_settings()
-    if not settings.anthropic_api_key:
+    # Cheap preflight via the Model Router (spec section 17/18) — same
+    # abort-before-touching-the-DB behavior as before, just provider-
+    # agnostic now: whichever provider "business_analysis" is routed to,
+    # not hardcoded to Anthropic specifically.
+    try:
+        get_provider_for_task("business_analysis")
+    except ProviderNotConfigured:
         logger.error("business_analysis_no_api_key", company_id=company_id)
         return
-    provider = AnthropicProvider(api_key=settings.anthropic_api_key)
 
     async with async_session_factory() as db:
         await set_tenant_context(db, tenant_uuid)
@@ -43,7 +46,7 @@ async def _run(job_id: str, tenant_id: str, company_id: str) -> None:
 
         try:
             await set_tenant_context(db, tenant_uuid)
-            analysis = await analyze_business(db, tenant_uuid, company, provider)
+            analysis = await analyze_business(db, tenant_uuid, company)
             await db.commit()
 
             await set_tenant_context(db, tenant_uuid)

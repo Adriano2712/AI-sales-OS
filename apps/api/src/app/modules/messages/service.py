@@ -6,8 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.modules.ai_gateway.base import AIProvider
-from app.modules.ai_gateway.service import run_ai_task
+from app.modules.ai_gateway.service import run_ai_task_routed
 from app.modules.companies.models import Company
 from app.modules.messages.ai_writer import MessageAIOutput, build_ai_request, default_language_for_country
 from app.modules.messages.enums import VALID_MESSAGE_STATUS_TRANSITIONS, MessageChannel, MessageStatus
@@ -66,7 +65,6 @@ async def generate_message(
     opportunity: Opportunity,
     company: Company,
     channel: MessageChannel,
-    ai_provider: AIProvider,
     language: str | None = None,
 ) -> Message:
     """Cost control (spec section 39), same idempotent-by-default pattern as
@@ -103,7 +101,7 @@ async def generate_message(
         sender_location=settings.sender_company_location,
         language=effective_language,
     )
-    ai_response = await run_ai_task(db, ai_provider, tenant_id, ai_request)
+    ai_response = await run_ai_task_routed(db, tenant_id, ai_request)
     output = cast(MessageAIOutput, ai_response.output)
 
     message = Message(

@@ -105,8 +105,11 @@ async def test_message_generation_job_creates_a_draft_message(app_session_factor
             await session.commit()
             job_id = job.id
 
-        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _FakeAIProvider())
-        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+        import app.modules.ai_gateway.service as ai_gateway_service
+
+        fake_router = lambda task: _FakeAIProvider()  # noqa: E731
+        monkeypatch.setattr(handler, "get_provider_for_task", fake_router)
+        monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
 
         await handler._run(str(job_id), str(tenant_id), str(opportunity_id), "WHATSAPP", "pt-BR")
 
@@ -171,8 +174,11 @@ async def test_rerunning_generation_reuses_the_draft_not_a_new_ai_call(
             admin_factory, app_session_factory, tenant_id
         )
 
-        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _CountingFakeProvider())
-        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+        import app.modules.ai_gateway.service as ai_gateway_service
+
+        fake_router = lambda task: _CountingFakeProvider()  # noqa: E731
+        monkeypatch.setattr(handler, "get_provider_for_task", fake_router)
+        monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
 
         async with app_session_factory() as session:
             await set_tenant_context(session, tenant_id)
@@ -228,8 +234,11 @@ async def test_do_not_contact_blocks_message_generation(app_session_factory, mon
             admin_factory, app_session_factory, tenant_id, do_not_contact=True
         )
 
-        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _FakeAIProvider())
-        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+        import app.modules.ai_gateway.service as ai_gateway_service
+
+        fake_router = lambda task: _FakeAIProvider()  # noqa: E731
+        monkeypatch.setattr(handler, "get_provider_for_task", fake_router)
+        monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
 
         async with app_session_factory() as session:
             await set_tenant_context(session, tenant_id)
@@ -304,8 +313,11 @@ async def test_requesting_a_different_language_creates_a_separate_message(
             admin_factory, app_session_factory, tenant_id
         )
 
-        monkeypatch.setattr(handler, "AnthropicProvider", lambda api_key: _CountingFakeProvider())
-        monkeypatch.setattr(handler.get_settings(), "anthropic_api_key", "fake-key-for-test")
+        import app.modules.ai_gateway.service as ai_gateway_service
+
+        fake_router = lambda task: _CountingFakeProvider()  # noqa: E731
+        monkeypatch.setattr(handler, "get_provider_for_task", fake_router)
+        monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
 
         async with app_session_factory() as session:
             await set_tenant_context(session, tenant_id)
