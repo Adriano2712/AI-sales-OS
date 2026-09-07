@@ -138,3 +138,86 @@ async def test_tenant_cannot_see_another_tenants_campaign_via_api(
             f"/api/v1/campaigns/{campaign_id}", headers={"Authorization": f"Bearer {token_b}"}
         )
         assert cross_tenant.status_code == 404
+
+
+@requires_live_db
+@requires_matching_env
+@pytest.mark.asyncio
+async def test_autonomous_discovery_rejects_target_quantity_over_the_safety_cap(
+    authenticated_client, two_tenants
+):
+    """Fase 9: the master spec's own escalation discipline (start small,
+    never a large unattended batch) enforced at creation time — a campaign
+    can't opt into daily autonomous runs with a large target_quantity."""
+    from app.main import app
+    from app.modules.tenancy.enums import Role
+
+    tenant_a, _ = two_tenants
+    token = await authenticated_client(tenant_a.id, Role.ADMIN)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/campaigns",
+            json=_campaign_payload(auto_discovery_enabled=True, target_quantity=11),
+            headers=headers,
+        )
+        assert response.status_code == 409, response.text
+
+        # A manual (non-autonomous) campaign is unaffected by the cap.
+        manual = await client.post(
+            "/api/v1/campaigns",
+            json=_campaign_payload(auto_discovery_enabled=False, target_quantity=33),
+            headers=headers,
+        )
+        assert manual.status_code == 201, manual.text
+
+
+@requires_live_db
+@requires_matching_env
+@pytest.mark.asyncio
+async def test_autonomous_discovery_allows_target_quantity_at_the_safety_cap(
+    authenticated_client, two_tenants
+):
+    from app.main import app
+    from app.modules.tenancy.enums import Role
+
+    tenant_a, _ = two_tenants
+    token = await authenticated_client(tenant_a.id, Role.ADMIN)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/v1/campaigns",
+            json=_campaign_payload(auto_discovery_enabled=True, target_quantity=10),
+            headers=headers,
+        )
+        assert created.status_code == 201, created.text
+        campaign_id = created.json()["id"]
+        assert created.json()["auto_discovery_enabled"] is True
+
+        # PATCHing target_quantity up past the cap while still autonomous
+        # must also be rejected — the check applies to the resolved final
+        # state, not just at creation time.
+        patched = await client.patch(
+            f"/api/v1/campaigns/{campaign_id}",
+            json={"target_quantity": 15},
+            headers=headers,
+        )
+        assert patched.status_code == 409, patched.text
+
+        # But turning autonomy off first, then raising the quantity, works.
+        disabled = await client.patch(
+            f"/api/v1/campaigns/{campaign_id}",
+            json={"auto_discovery_enabled": False},
+            headers=headers,
+        )
+        assert disabled.status_code == 200
+        raised = await client.patch(
+            f"/api/v1/campaigns/{campaign_id}",
+            json={"target_quantity": 15},
+            headers=headers,
+        )
+        assert raised.status_code == 200

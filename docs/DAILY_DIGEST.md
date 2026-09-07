@@ -1,7 +1,8 @@
 # Descoberta Diária + Resumo por Email
 
-**Status: built.** Um 4º processo local, opcional — só faz algo quando você
-o deixa rodando (`workers/scheduler.py`), junto com API + worker.
+**Status: built. Descoberta autônoma configurável por campanha adicionada
+(master-plan Fase 9).** Um 4º processo local, opcional — só faz algo quando
+você o deixa rodando (`workers/scheduler.py`), junto com API + worker.
 
 ```
 workers/scheduler.py (tick a cada 15min)
@@ -121,6 +122,54 @@ automação de descoberta diária esteja desligada — é uma questão de
 confiabilidade geral do pipeline, não uma feature do digest. Validado de
 verdade contra o banco real (job sintético RETRYING → reenfileirado
 corretamente; job no limite de tentativas → virou FAILED corretamente).
+
+## Master-plan Fase 9: descoberta autônoma configurável, por campanha
+
+Antes desta fase, autonomia era tudo-ou-nada: **um único tenant**
+(`DAILY_DISCOVERY_TENANT_ID`), **um único segmento por dia** (rotação fixa
+de 3), sempre `cities=[NATIONWIDE_CITY_SENTINEL]` (Brasil inteiro),
+`target_quantity` sempre 5 — nenhum outro tenant do sistema tinha qualquer
+forma de rodar descoberta sem um humano clicar manualmente em "iniciar
+run" a cada vez.
+
+Agora **qualquer campanha, de qualquer tenant** pode optar por rodar
+sozinha todo dia, com `Campaign.auto_discovery_enabled=True` — usando o
+segmento/cidades/estado/país/quantidade/serviços/pesos **reais e já
+configurados** dessa campanha específica, não os valores fixos do piloto
+original. O piloto original continua funcionando exatamente como antes
+(`_tick`, `_get_or_create_daily_campaign`, rotação de segmento,
+`DAILY_DISCOVERY_TENANT_ID`) — nada nele foi tocado; a nova varredura
+genérica (`_trigger_autonomous_campaign_runs_all_tenants`) roda **ao lado**
+dele, nunca sobre a mesma campanha (o piloto nunca marca
+`auto_discovery_enabled=True` na sua própria campanha sintética), então não
+há risco de disparo duplicado.
+
+**Mecanismo**: mesmo desenho de "varrer todos os tenants, isolar falha por
+item" já provado em `_retry_stuck_jobs_all_tenants` — para cada tenant,
+busca campanhas `ACTIVE` com `auto_discovery_enabled=True` e chama
+`_ensure_todays_run` (já genérica, recebe `campaign` como parâmetro, zero
+mudança necessária ali) para cada uma. Uma campanha falhando não impede as
+outras.
+
+**Limite de segurança de custo, aplicado em código**: a própria regra do
+prompt mestre ("comece pequeno: 3, depois 10, nunca lote grande de uma só
+vez") virou uma checagem real —
+`campaigns/service.py::_MAX_AUTONOMOUS_TARGET_QUANTITY = 10`. Uma campanha
+só pode ter `auto_discovery_enabled=True` com `target_quantity <= 10`
+(checado tanto na criação quanto num PATCH parcial, contra o estado final
+resolvido — não dá pra contornar setando os dois campos em requisições
+separadas). Uma campanha manual (sem autonomia) não tem esse limite — quem
+roda manualmente já está re-aprovando cada execução.
+
+**Validação real end-to-end**, com um tenant descartável dedicado (nunca o
+tenant real de desenvolvimento — ver o incidente de dados da Fase 8): (1)
+campanha com `auto_discovery_enabled=True` disparou corretamente na
+primeira varredura (1 `CampaignRun` criado, 1 job `DISCOVERY` enfileirado);
+(2) segunda varredura no mesmo dia não duplicou (ainda 1 chamada de fila,
+reaproveitando `_ensure_todays_run` sem nenhuma mudança); (3) tentativa de
+criar campanha autônoma com `target_quantity=11` corretamente rejeitada
+pelo limite de segurança. Tenant descartável limpo ao final (delete em
+cascata via FK, nunca um `DELETE` genérico por `tenant_id`).
 
 ## Limitação conhecida (aceita, não corrigida — escopo de piloto)
 

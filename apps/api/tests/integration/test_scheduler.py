@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "workers"))
@@ -116,6 +117,174 @@ async def test_ensure_todays_run_does_not_double_trigger(app_session_factory):
                 await admin_db.delete(tenant)
                 await admin_db.commit()
         await admin_engine.dispose()
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_trigger_autonomous_campaign_runs_creates_run_for_opted_in_campaign(
+    app_session_factory, monkeypatch, two_tenants
+):
+    """Fase 9: a campaign with auto_discovery_enabled=True gets a fresh run
+    and a queued DISCOVERY job, using its own real segment/cities/
+    target_quantity — no hardcoded pilot tenant/segment involved."""
+    import scheduler
+
+    fake_queue = _FakeQueue()
+    monkeypatch.setattr(scheduler, "get_queue", lambda: fake_queue)
+
+    tenant_a, _ = two_tenants
+
+    async with app_session_factory() as session:
+        await set_tenant_context(session, tenant_a.id)
+        campaign = Campaign(
+            tenant_id=tenant_a.id,
+            name="Autonomous Test Campaign",
+            segment="clinics",
+            cities=["Votorantim"],
+            state="SP",
+            country="BR",
+            target_quantity=5,
+            auto_discovery_enabled=True,
+            status=CampaignStatus.ACTIVE,
+        )
+        session.add(campaign)
+        await session.commit()
+        campaign_id = campaign.id
+
+        await scheduler._trigger_autonomous_campaign_runs(session, tenant_a.id)
+
+        await set_tenant_context(session, tenant_a.id)
+        result = await session.execute(
+            select(CampaignRun).where(CampaignRun.campaign_id == campaign_id)
+        )
+        runs = result.scalars().all()
+        assert len(runs) == 1
+        assert runs[0].status == CampaignRunStatus.PENDING
+
+    assert len(fake_queue.calls) == 1
+    assert fake_queue.calls[0][0] == "app.modules.jobs.handlers.discovery.run"
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_trigger_autonomous_campaign_runs_skips_non_opted_in_campaigns(
+    app_session_factory, monkeypatch, two_tenants
+):
+    """auto_discovery_enabled defaults to False — a campaign a human runs
+    manually must never get an unattended run just for being ACTIVE."""
+    import scheduler
+
+    fake_queue = _FakeQueue()
+    monkeypatch.setattr(scheduler, "get_queue", lambda: fake_queue)
+
+    tenant_a, _ = two_tenants
+
+    async with app_session_factory() as session:
+        await set_tenant_context(session, tenant_a.id)
+        campaign = Campaign(
+            tenant_id=tenant_a.id,
+            name="Manual Only Campaign",
+            segment="clinics",
+            cities=["Votorantim"],
+            state="SP",
+            country="BR",
+            target_quantity=5,
+            status=CampaignStatus.ACTIVE,  # auto_discovery_enabled left at its False default
+        )
+        session.add(campaign)
+        await session.commit()
+
+        await scheduler._trigger_autonomous_campaign_runs(session, tenant_a.id)
+
+    assert fake_queue.calls == []
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_trigger_autonomous_campaign_runs_does_not_double_trigger_same_day(
+    app_session_factory, monkeypatch, two_tenants
+):
+    import scheduler
+
+    fake_queue = _FakeQueue()
+    monkeypatch.setattr(scheduler, "get_queue", lambda: fake_queue)
+
+    tenant_a, _ = two_tenants
+
+    async with app_session_factory() as session:
+        await set_tenant_context(session, tenant_a.id)
+        campaign = Campaign(
+            tenant_id=tenant_a.id,
+            name="Autonomous Rerun Campaign",
+            segment="clinics",
+            cities=["Votorantim"],
+            state="SP",
+            country="BR",
+            target_quantity=5,
+            auto_discovery_enabled=True,
+            status=CampaignStatus.ACTIVE,
+        )
+        session.add(campaign)
+        await session.commit()
+
+        await scheduler._trigger_autonomous_campaign_runs(session, tenant_a.id)
+        await scheduler._trigger_autonomous_campaign_runs(session, tenant_a.id)
+
+    assert len(fake_queue.calls) == 1  # second tick same day: no-op
+
+
+@requires_live_db
+@requires_matching_env
+@pytest.mark.asyncio
+async def test_trigger_autonomous_campaign_runs_all_tenants_covers_every_tenant(
+    app_session_factory, monkeypatch, two_tenants
+):
+    """Deliberately not scoped to DAILY_DISCOVERY_TENANT_ID — same reasoning
+    as the job-retry sweep: this is per-campaign opt-in, applying to every
+    tenant that has one, not just the single hardcoded pilot tenant."""
+    import scheduler
+
+    fake_queue = _FakeQueue()
+    monkeypatch.setattr(scheduler, "get_queue", lambda: fake_queue)
+
+    tenant_a, tenant_b = two_tenants
+
+    async with app_session_factory() as session:
+        await set_tenant_context(session, tenant_a.id)
+        session.add(
+            Campaign(
+                tenant_id=tenant_a.id,
+                name="Autonomous Tenant A",
+                segment="restaurants",
+                cities=["Sorocaba"],
+                state="SP",
+                country="BR",
+                target_quantity=5,
+                auto_discovery_enabled=True,
+                status=CampaignStatus.ACTIVE,
+            )
+        )
+        await session.commit()
+
+        await set_tenant_context(session, tenant_b.id)
+        session.add(
+            Campaign(
+                tenant_id=tenant_b.id,
+                name="Autonomous Tenant B",
+                segment="restaurants",
+                cities=["Sorocaba"],
+                state="SP",
+                country="BR",
+                target_quantity=5,
+                auto_discovery_enabled=True,
+                status=CampaignStatus.ACTIVE,
+            )
+        )
+        await session.commit()
+
+    await scheduler._trigger_autonomous_campaign_runs_all_tenants()
+
+    assert len(fake_queue.calls) == 2  # one DISCOVERY job per tenant's opted-in campaign
 
 
 @requires_live_db

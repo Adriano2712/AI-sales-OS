@@ -13,6 +13,7 @@ from app.modules.campaigns.schemas import (
     CampaignUpdate,
 )
 from app.modules.campaigns.service import (
+    AutonomousDiscoveryLimitExceeded,
     CampaignNotActive,
     InvalidStatusTransition,
     create_campaign,
@@ -45,7 +46,10 @@ async def create_campaign_endpoint(
     context: TenantContext = Depends(require_write_access()),
     db: AsyncSession = Depends(get_tenant_db),
 ) -> CampaignRead:
-    campaign = await create_campaign(db, context.tenant_id, data)
+    try:
+        campaign = await create_campaign(db, context.tenant_id, data)
+    except AutonomousDiscoveryLimitExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     await log_event(
         db, context.tenant_id, AuditEventType.CAMPAIGN_CREATED, {"campaign_id": str(campaign.id)}
     )
@@ -86,6 +90,8 @@ async def update_campaign_endpoint(
     try:
         campaign = await update_campaign(db, campaign, data)
     except InvalidStatusTransition as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except AutonomousDiscoveryLimitExceeded as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     await log_event(
         db, context.tenant_id, AuditEventType.CAMPAIGN_UPDATED, {"campaign_id": str(campaign.id)}

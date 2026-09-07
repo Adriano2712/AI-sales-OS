@@ -385,6 +385,81 @@ async def _retry_stuck_jobs(db, tenant_id: uuid.UUID) -> None:
         )
 
 
+async def _trigger_autonomous_campaign_runs(db, tenant_id: uuid.UUID) -> None:
+    """Fase 9 (configurable autonomous discovery). Any ACTIVE campaign this
+    tenant explicitly opted in via `Campaign.auto_discovery_enabled` gets a
+    fresh CampaignRun once per calendar day, using its own real, already-
+    configured segment/cities/state/country/target_quantity/services/
+    opportunity_weights — not the single hardcoded pilot tenant/segment-
+    rotation/nationwide-only shape `_tick` above still drives unchanged
+    (that's real, already-validated production usage, see
+    docs/DAILY_DIGEST.md; this is additive, not a replacement for it).
+    Reuses `_ensure_todays_run`'s per-campaign idempotency as-is — no
+    changes needed there, it already takes `campaign` as a parameter."""
+    await set_tenant_context(db, tenant_id)
+    result = await db.execute(
+        select(Campaign).where(
+            Campaign.tenant_id == tenant_id,
+            Campaign.auto_discovery_enabled.is_(True),
+            Campaign.status == CampaignStatus.ACTIVE,
+        )
+    )
+    campaigns = list(result.scalars())
+
+    for campaign in campaigns:
+        try:
+            await set_tenant_context(db, tenant_id)
+            run = await _ensure_todays_run(db, tenant_id, campaign)
+            if run is None:
+                continue
+            await db.commit()
+
+            await set_tenant_context(db, tenant_id)
+            job = await get_or_create_job(
+                db,
+                tenant_id=tenant_id,
+                job_type=JobType.DISCOVERY,
+                idempotency_key=str(run.id),
+                payload={"campaign_run_id": str(run.id)},
+            )
+            await db.commit()
+            get_queue().enqueue(
+                "app.modules.jobs.handlers.discovery.run", str(job.id), str(tenant_id), str(run.id)
+            )
+            logger.info(
+                "autonomous_discovery_triggered",
+                tenant_id=str(tenant_id),
+                campaign_id=str(campaign.id),
+                run_id=str(run.id),
+            )
+        except Exception as exc:  # noqa: BLE001 - one campaign's failure must not skip the rest
+            logger.error(
+                "autonomous_discovery_failed",
+                tenant_id=str(tenant_id),
+                campaign_id=str(campaign.id),
+                error=str(exc),
+            )
+
+
+async def _trigger_autonomous_campaign_runs_all_tenants() -> None:
+    """Tenant-agnostic, same shape/reasoning as _retry_stuck_jobs_all_tenants
+    below — autonomous discovery is opted into per-campaign
+    (auto_discovery_enabled), not gated behind the single hardcoded
+    DAILY_DISCOVERY_TENANT_ID `_tick` still uses."""
+    async with async_session_factory() as db:
+        result = await db.execute(select(Tenant.id))  # tenants table has no RLS
+        tenant_ids = [row[0] for row in result.all()]
+
+    for tenant_id in tenant_ids:
+        async with async_session_factory() as db:
+            try:
+                await _trigger_autonomous_campaign_runs(db, tenant_id)
+            except Exception as exc:  # noqa: BLE001 - one tenant's failure must not skip the rest
+                logger.error(
+                    "autonomous_discovery_sweep_failed", tenant_id=str(tenant_id), error=str(exc)
+                )
+
+
 async def _retry_stuck_jobs_all_tenants() -> None:
     """Tenant-agnostic on purpose (unlike _tick, which only runs the daily
     discovery/digest for one configured tenant) — job-retry reliability
@@ -455,6 +530,14 @@ async def main() -> None:
                 await _tick(daily_tenant_id)
             except Exception as exc:  # noqa: BLE001 - one bad tick must not kill the scheduler
                 logger.error("scheduler_tick_failed", error=str(exc))
+
+        # Fase 9: configurable autonomous discovery, every tenant, every
+        # campaign that opted in — independent of (and never overlapping
+        # with) the single hardcoded pilot tick above.
+        try:
+            await _trigger_autonomous_campaign_runs_all_tenants()
+        except Exception as exc:  # noqa: BLE001 - one bad sweep must not kill the scheduler
+            logger.error("autonomous_discovery_sweep_failed", error=str(exc))
 
         try:
             await _retry_stuck_jobs_all_tenants()

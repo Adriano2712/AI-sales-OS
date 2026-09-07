@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,6 +37,17 @@ class Campaign(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     # merges whatever's set here over the defaults rather than replacing
     # them wholesale.
     opportunity_weights: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Fase 9 (configurable autonomous discovery) — opts THIS campaign into
+    # the scheduler's daily sweep (workers/scheduler.py::
+    # _trigger_autonomous_campaign_runs_all_tenants), reusing its own real
+    # segment/cities/state/country/target_quantity/services/
+    # opportunity_weights rather than the single hardcoded pilot tenant/
+    # segment-rotation/nationwide-only campaign the scheduler's pre-
+    # existing `_tick` still drives unchanged. False by default — autonomy
+    # is opt-in per campaign, never silently on. See campaigns/service.py's
+    # _MAX_AUTONOMOUS_TARGET_QUANTITY for the cost-safety cap enforced
+    # alongside this flag.
+    auto_discovery_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[CampaignStatus] = mapped_column(
         Enum(CampaignStatus, name="campaign_status"), default=CampaignStatus.DRAFT
     )

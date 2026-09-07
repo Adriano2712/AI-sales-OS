@@ -20,6 +20,32 @@ class CampaignNotActive(ValueError):
     """Raised when a run is requested for a campaign that isn't ACTIVE."""
 
 
+# Fase 9 (configurable autonomous discovery) — the master spec's own
+# escalation discipline, enforced in code rather than left to hope: start
+# small (3, then 10), never a large batch unattended. Autonomous means the
+# scheduler creates a fresh run every day with nobody re-approving each
+# one, so an uncapped target_quantity here would be real, compounding,
+# unattended cost (~$0.01-0.013 per company just for business_analysis,
+# see docs/DAILY_DIGEST.md) — this cap is intentionally the same ceiling
+# already validated in real production use (docs/DISCOVERY.md's Fase 9
+# pilot). A human running a one-off manual campaign (auto_discovery_
+# enabled=False) is unaffected — they're already re-approving each run by
+# clicking "start run."
+_MAX_AUTONOMOUS_TARGET_QUANTITY = 10
+
+
+class AutonomousDiscoveryLimitExceeded(ValueError):
+    def __init__(self, target_quantity: int) -> None:
+        super().__init__(
+            f"target_quantity={target_quantity} exceeds the autonomous-discovery "
+            f"limit of {_MAX_AUTONOMOUS_TARGET_QUANTITY} — a campaign that runs "
+            "unattended every day must start small (spec: 3, then 10, never a "
+            "large batch at once). Lower target_quantity, or set "
+            "auto_discovery_enabled=False and start runs manually instead."
+        )
+        self.target_quantity = target_quantity
+
+
 def validate_status_transition(current: CampaignStatus, new: CampaignStatus) -> None:
     """Pure function, no DB — unit-testable in isolation (see spec section 68:
     state transitions belong in unit tests, not integration tests)."""
@@ -32,6 +58,8 @@ def validate_status_transition(current: CampaignStatus, new: CampaignStatus) -> 
 async def create_campaign(
     db: AsyncSession, tenant_id: uuid.UUID, data: CampaignCreate
 ) -> Campaign:
+    if data.auto_discovery_enabled and data.target_quantity > _MAX_AUTONOMOUS_TARGET_QUANTITY:
+        raise AutonomousDiscoveryLimitExceeded(data.target_quantity)
     campaign = Campaign(tenant_id=tenant_id, **data.model_dump())
     db.add(campaign)
     await db.flush()
@@ -70,6 +98,17 @@ async def update_campaign(
     db: AsyncSession, campaign: Campaign, data: CampaignUpdate
 ) -> Campaign:
     updates = data.model_dump(exclude_unset=True, exclude={"status"})
+
+    # Checked against the *resolved* final state (existing value merged with
+    # whatever this partial update actually touches) — a PATCH that only
+    # sets auto_discovery_enabled=True without re-sending target_quantity
+    # must still be caught if the campaign's existing target_quantity is
+    # already over the autonomous-discovery cap, and vice versa.
+    resolved_auto_discovery = updates.get("auto_discovery_enabled", campaign.auto_discovery_enabled)
+    resolved_target_quantity = updates.get("target_quantity", campaign.target_quantity)
+    if resolved_auto_discovery and resolved_target_quantity > _MAX_AUTONOMOUS_TARGET_QUANTITY:
+        raise AutonomousDiscoveryLimitExceeded(resolved_target_quantity)
+
     for field, value in updates.items():
         setattr(campaign, field, value)
 

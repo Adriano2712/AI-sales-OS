@@ -18,6 +18,10 @@ class CampaignCreate(BaseModel):
     services: list[str] = Field(default_factory=list)
     # Fase 7 — None means "use opportunities/scoring.py's system defaults".
     opportunity_weights: OpportunityWeights | None = None
+    # Fase 9 — opt-in only; the master spec's own cost-safety rule (start
+    # small, never large unattended batches) is enforced in
+    # campaigns/service.py against target_quantity when this is True.
+    auto_discovery_enabled: bool = False
 
 
 class CampaignUpdate(BaseModel):
@@ -29,6 +33,7 @@ class CampaignUpdate(BaseModel):
     filters: dict | None = None
     services: list[str] | None = None
     opportunity_weights: OpportunityWeights | None = None
+    auto_discovery_enabled: bool | None = None
     status: CampaignStatus | None = None
 
 
@@ -46,6 +51,7 @@ class CampaignRead(BaseModel):
     filters: dict
     services: list[str]
     opportunity_weights: OpportunityWeights | None
+    auto_discovery_enabled: bool
     status: CampaignStatus
     created_at: datetime
     updated_at: datetime
