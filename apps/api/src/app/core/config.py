@@ -38,6 +38,18 @@ class Settings(BaseSettings):
     """Actor id in `username/actor-name` form. Verified against the real
     Apify API before use — see docs/DISCOVERY.md."""
 
+    brave_search_api_key: str | None = None
+    """Fase 13: fallback website lookup for when Overpass/Apify's own
+    `website` field is empty (real gap found on a Chicago campaign — neither
+    source having the field doesn't mean the business has no site). Google
+    Custom Search was tried first but is unusable for this: Google retired
+    "search the entire web" for any engine created from 2026-01-20 onward,
+    hard-limiting new engines to an explicit list of pre-chosen domains
+    (confirmed against Google's own support docs). Optional by design, same
+    degrade-gracefully pattern as apify_api_token: unset means
+    enrichment/website_search.py quietly does nothing, discovery proceeds
+    exactly as before this existed."""
+
     gmail_smtp_user: str | None = None
     gmail_smtp_app_password: str | None = None
     daily_digest_recipient_email: str | None = None

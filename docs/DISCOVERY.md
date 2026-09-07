@@ -274,3 +274,67 @@ silently returned zero rows rather than erroring, which is exactly why this
 needed a real query against the real database to catch — a mocked/unit
 test would never have exercised RLS at all. Fixed by re-calling
 `set_tenant_context` immediately before both call sites.
+
+## Fase 13: Website search fallback (real gap found, not anticipated)
+
+**The gap this closes**: a real Chicago campaign found "La Cocina de Irma" —
+a real, active restaurant — with `website=None`, because neither Overpass's
+OSM tags nor Apify's Google Maps listing had a website field for it. The
+user found a listing for it via a plain Google search and asked why the
+system said "no website." Investigation confirmed neither source is wrong
+about *its own* data — Google Maps and OSM genuinely don't have that field
+for this business — but that doesn't mean no website exists anywhere on the
+web.
+
+**Mechanism** (`enrichment/website_search.py`): when `company.website` is
+still `None` after discovery + `enrich_company`, `find_website_via_search`
+calls the Brave Search API with `"{name}" {city} {state}` and accepts the
+first result that (a) isn't on a known directory/social/aggregator domain
+and (b) has the company's own normalized name appearing verbatim in its
+title or snippet. A match sets `company.website`, records a `CompanySource`
+(`provider="brave_search"`), and a `MEDIUM`-confidence `Evidence` row
+distinct from `enrich_company`'s own earlier `UNKNOWN` claim (kept side by
+side, not overwritten — an honest record of what was known at each point).
+Runs inline (a single bounded, ~8s-timeout HTTP call), not as a separate
+queued job like `website_analysis` — proportionate to its actual cost, and
+its result feeds directly into the very next `if company.website:` decision
+that already exists in the discovery loop.
+
+**Google Custom Search was tried first and rejected** — not a design
+preference, a real blocker: Google retired "search the entire web" for any
+Custom Search Engine created from 2026-01-20 onward (confirmed against
+Google's own support docs after the toggle in the console UI simply
+wouldn't respond). New engines are hard-limited to an explicit list of up
+to 50 pre-chosen domains, which defeats the entire purpose of finding an
+*unknown* business's site. Brave Search API has no such restriction.
+
+**Real finding during validation, not anticipated in the design**: the
+first live call for "La Cocina de Irma" returned
+`lacocinadeirma.restaurants-us.com` — a subdomain-per-business menu
+directory network, not the business's own domain. Excluding it surfaced a
+*second* one (`goto-where.com`), then excluding that surfaced a *third*
+(`weeblyte.com`) plus a fourth generic listing site (`local.yahoo.com`).
+Inspecting the raw top-10 Brave results with no filtering at all showed
+every single one was either a known review/social platform (Yelp,
+TripAdvisor, Facebook, MapQuest, Apple Maps, Reddit) or one of these four
+directory networks — strong evidence this specific business genuinely has
+no website of its own, not that the search or the filtering is broken. The
+correct behavior here is reporting "not found," which is what happens once
+all four are excluded — a missed real website is an acceptable cost;
+confidently linking a directory page as if it were the business's own site
+is not (spec section 35).
+
+`_EXCLUDED_DOMAINS` is deliberately grown reactively from real findings
+like these, never preemptively guessed, and matched by
+`_is_excluded_domain` against the full host *and* any subdomain of it — a
+bug caught in the same validation pass, since a bare `host in
+_EXCLUDED_DOMAINS` membership check can never catch a per-business
+subdomain (no two businesses share one).
+
+**Real validation, full Chicago campaign**: of the 3 companies that
+actually had `website=None` after discovery (Jollibee, Sbarro, La Cocina de
+Irma), the search fallback correctly found real, verified corporate
+websites for the first two (`locations.jollibeefoods.com`,
+`sbarro.com/locations/...`) and correctly returned nothing for the third
+after excluding all four confirmed directory networks — 2 real gaps closed,
+1 correctly left as "not found" rather than mislinked.

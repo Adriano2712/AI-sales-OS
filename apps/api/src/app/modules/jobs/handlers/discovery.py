@@ -18,6 +18,7 @@ from app.modules.discovery.base import DiscoveryProvider, DiscoveryProviderError
 from app.modules.discovery.providers.apify import ApifyProvider
 from app.modules.discovery.providers.overpass import OverpassProvider
 from app.modules.enrichment.service import enrich_company
+from app.modules.enrichment.website_search import find_website_via_search
 from app.modules.jobs.async_entrypoint import run_job_sync
 from app.modules.jobs.enums import JobType
 from app.modules.jobs.models import Job
@@ -163,6 +164,13 @@ async def _discover_and_process_city(
             # so doing it inline is cheap. See enrichment/service.py.
             await enrich_company(db, tenant_uuid, company)
             result.enriched += 1
+
+            if not company.website:
+                # Fase 13: Overpass/Apify's own `website` field being empty
+                # doesn't mean the business has no site — see
+                # enrichment/website_search.py. Only ever fills a gap, never
+                # overwrites a value a primary source already gave us.
+                await find_website_via_search(db, tenant_uuid, company)
 
             await db.commit()
 
