@@ -2,7 +2,7 @@ import httpx
 
 from app.modules.companies.service import NormalizedRawCompany
 from app.modules.discovery.base import NATIONWIDE_CITY_SENTINEL, DiscoveryProvider, DiscoveryProviderError
-from app.modules.discovery.segment_mapping import SEGMENT_TO_APIFY_SEARCH_TERM
+from app.modules.discovery.segment_mapping import SEGMENT_TO_APIFY_SEARCH_TERM, get_apify_search_term
 
 _APIFY_API_URL = "https://api.apify.com/v2"
 
@@ -41,12 +41,17 @@ class ApifyProvider(DiscoveryProvider):
     async def search(
         self, segment: str, city: str, state: str, country: str, limit: int
     ) -> list[NormalizedRawCompany]:
-        search_term = SEGMENT_TO_APIFY_SEARCH_TERM.get(segment)
-        if not search_term:
+        segment_terms = SEGMENT_TO_APIFY_SEARCH_TERM.get(segment)
+        if not segment_terms:
             raise DiscoveryProviderError(
                 f"No Apify search-term mapping for segment '{segment}' — see "
                 "app.modules.discovery.segment_mapping.SEGMENT_TO_APIFY_SEARCH_TERM"
             )
+        # Real-world fix: searching "restaurante" (Portuguese) against a US
+        # city returns noise/nothing — the term has to match the language
+        # actually used there. Falls back to the original BR term for any
+        # country without its own checked mapping.
+        search_term = get_apify_search_term(segment_terms, country)
 
         location_query = self._build_location_query(city, country)
 

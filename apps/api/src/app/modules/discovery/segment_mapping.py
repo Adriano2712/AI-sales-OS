@@ -33,11 +33,24 @@ SEGMENT_TO_OSM_TAGS: dict[str, list[tuple[str, str]]] = {
 
 # Same containment idea as SEGMENT_TO_OSM_TAGS above, for Apify's Google Maps
 # Scraper (compass/crawler-google-places): it searches by free-text term
-# (`searchStringsArray`), not a tag vocabulary, so this maps our segment to a
-# Portuguese search term a real user would type. An unmapped segment raises
-# DiscoveryProviderError, same as the OSM side.
-SEGMENT_TO_APIFY_SEARCH_TERM: dict[str, str] = {
-    "restaurants": "restaurante",
-    "clinics": "clínica médica",
-    "b2b_services": "empresa de serviços",
+# (`searchStringsArray`), not a tag vocabulary — so the term has to be a real
+# word in the language people (and Google) actually use in that country, not
+# just a translation of the segment name. This project's original campaigns
+# were all Brazil-only, so "BR" is the one guaranteed key per segment and the
+# fallback for any country without its own real, checked term (see
+# get_apify_search_term) — never a guessed translation for an unmapped
+# country. An unmapped segment raises DiscoveryProviderError, same as the
+# OSM side.
+SEGMENT_TO_APIFY_SEARCH_TERM: dict[str, dict[str, str]] = {
+    "restaurants": {"BR": "restaurante", "US": "restaurant"},
+    "clinics": {"BR": "clínica médica", "US": "medical clinic"},
+    "b2b_services": {"BR": "empresa de serviços", "US": "professional services company"},
 }
+
+
+def get_apify_search_term(segment_terms: dict[str, str], country: str) -> str:
+    """Pure — real country-specific term when we have one checked and
+    mapped, otherwise the original BR/Portuguese term (this project's
+    long-standing default) rather than inventing a translation for a
+    country nobody's verified a real search term for yet."""
+    return segment_terms.get(country, segment_terms["BR"])
