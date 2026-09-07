@@ -167,6 +167,215 @@ async def test_discovery_job_creates_companies_and_completes_run(
 
 @requires_live_db
 @pytest.mark.asyncio
+async def test_smart_refill_finds_more_when_first_pass_falls_short(
+    app_session_factory, monkeypatch
+):
+    """Fase 8: real supply (6) exceeds the first pass's limit (target_quantity=3)
+    — a refill pass asking for a higher limit must surface the rest, not just
+    re-process the same 3."""
+    import app.modules.jobs.handlers.discovery as discovery_handler
+
+    tenant_id = uuid.uuid4()
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from .conftest import ADMIN_DATABASE_URL
+
+    admin_engine = create_async_engine(ADMIN_DATABASE_URL)
+    admin_factory = async_sessionmaker(admin_engine, expire_on_commit=False, class_=AsyncSession)
+
+    from app.modules.tenancy.models import Tenant
+
+    async with admin_factory() as admin_db:
+        tenant = Tenant(id=tenant_id, name=f"Smart Refill Headroom Tenant {uuid.uuid4().hex[:6]}")
+        admin_db.add(tenant)
+        await admin_db.commit()
+
+    try:
+        campaign_id, run_id, job_id = await _seed_campaign_run(
+            app_session_factory, tenant_id, ["Sorocaba"], target_quantity=3
+        )
+
+        # _FakeProvider.search already truncates to `limit` like the real
+        # Apify actor does — 6 real companies exist, first pass only asks
+        # for 3.
+        fake_results = {
+            "Sorocaba": [_raw(f"Restaurante {i}", f"node/{i}") for i in range(6)]
+        }
+        monkeypatch.setattr(
+            discovery_handler, "OverpassProvider", lambda: _FakeProvider(fake_results)
+        )
+
+        await discovery_handler._run(str(job_id), str(tenant_id), str(run_id))
+
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            updated_run = await session.get(CampaignRun, run_id)
+            # Original counters are untouched by refill — still exactly the
+            # first pass's own numbers (API/dashboard backward-compat).
+            assert updated_run.companies_found == 3
+            assert updated_run.refill_attempts >= 1
+            assert updated_run.usable_found == 3  # hit target_quantity=3
+            assert updated_run.refill_companies_found > 0  # refill genuinely found more
+
+            result = await session.execute(select(Company).where(Company.tenant_id == tenant_id))
+            companies = result.scalars().all()
+            # Refill only needed to *reach* the target — it doesn't keep
+            # pulling once satisfied, so not all 6 real companies need to
+            # have been ingested, just at least the 3 required.
+            assert len(companies) >= 3
+    finally:
+        async with admin_factory() as admin_db:
+            tenant = await admin_db.get(Tenant, tenant_id)
+            if tenant is not None:
+                await admin_db.delete(tenant)
+                await admin_db.commit()
+        await admin_engine.dispose()
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_smart_refill_stops_after_exhausting_available_supply(
+    app_session_factory, monkeypatch
+):
+    """Fase 8: real supply (2) can never reach target_quantity=10 — refill
+    must try, find nothing new, and stop rather than looping pointlessly."""
+    import app.modules.jobs.handlers.discovery as discovery_handler
+
+    tenant_id = uuid.uuid4()
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from .conftest import ADMIN_DATABASE_URL
+
+    admin_engine = create_async_engine(ADMIN_DATABASE_URL)
+    admin_factory = async_sessionmaker(admin_engine, expire_on_commit=False, class_=AsyncSession)
+
+    from app.modules.tenancy.models import Tenant
+
+    async with admin_factory() as admin_db:
+        tenant = Tenant(id=tenant_id, name=f"Smart Refill Exhausted Tenant {uuid.uuid4().hex[:6]}")
+        admin_db.add(tenant)
+        await admin_db.commit()
+
+    try:
+        campaign_id, run_id, job_id = await _seed_campaign_run(
+            app_session_factory, tenant_id, ["Sorocaba"], target_quantity=10
+        )
+
+        fake_results = {
+            "Sorocaba": [_raw("Restaurante Pequeno A", "node/a"), _raw("Restaurante Pequeno B", "node/b")]
+        }
+        monkeypatch.setattr(
+            discovery_handler, "OverpassProvider", lambda: _FakeProvider(fake_results)
+        )
+
+        await discovery_handler._run(str(job_id), str(tenant_id), str(run_id))
+
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            updated_run = await session.get(CampaignRun, run_id)
+            assert updated_run.status == CampaignRunStatus.COMPLETED  # still completes, not stuck
+            assert updated_run.companies_found == 2
+            assert updated_run.usable_found == 2  # never reaches 10 -- real supply exhausted
+            assert updated_run.refill_attempts == 1  # tries once, then gives up -- doesn't loop forever
+    finally:
+        async with admin_factory() as admin_db:
+            tenant = await admin_db.get(Tenant, tenant_id)
+            if tenant is not None:
+                await admin_db.delete(tenant)
+                await admin_db.commit()
+        await admin_engine.dispose()
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_smart_refill_skips_already_contacted_companies_from_usable_count(
+    app_session_factory, monkeypatch
+):
+    """Fase 8: spec's own "skip already-contacted/duplicate leads" — a
+    company a provider rediscovers that already has a tracked Opportunity
+    outcome must not count toward this campaign's quota, even though it's
+    still a real, valid Company match."""
+    import app.modules.jobs.handlers.discovery as discovery_handler
+    from app.modules.opportunities.enums import OpportunityOutcome, OpportunityStatus, OpportunityType
+    from app.modules.opportunities.models import Opportunity
+
+    tenant_id = uuid.uuid4()
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from .conftest import ADMIN_DATABASE_URL
+
+    admin_engine = create_async_engine(ADMIN_DATABASE_URL)
+    admin_factory = async_sessionmaker(admin_engine, expire_on_commit=False, class_=AsyncSession)
+
+    from app.modules.tenancy.models import Tenant
+
+    async with admin_factory() as admin_db:
+        tenant = Tenant(id=tenant_id, name=f"Smart Refill Contacted Tenant {uuid.uuid4().hex[:6]}")
+        admin_db.add(tenant)
+        await admin_db.commit()
+
+    try:
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            existing_company = Company(
+                tenant_id=tenant_id,
+                name="Restaurante Ja Contatado",
+                normalized_name="restaurante ja contatado",
+                segment="restaurants",
+                city="Sorocaba",
+                state="SP",
+                country="BR",
+                phone="15988887777",
+                status=CompanyStatus.DISCOVERED,
+            )
+            session.add(existing_company)
+            await session.flush()
+            session.add(
+                Opportunity(
+                    tenant_id=tenant_id,
+                    company_id=existing_company.id,
+                    type=OpportunityType.OTHER,
+                    status=OpportunityStatus.OPEN,
+                    outcome=OpportunityOutcome.CONTACTED,
+                )
+            )
+            await session.commit()
+
+        campaign_id, run_id, job_id = await _seed_campaign_run(
+            app_session_factory, tenant_id, ["Sorocaba"], target_quantity=2
+        )
+
+        fake_results = {
+            "Sorocaba": [
+                # Rediscovers the already-contacted company via phone match.
+                _raw("Restaurante Ja Contatado Redescoberto", "node/rediscovered", phone="15988887777"),
+                _raw("Restaurante Genuinamente Novo", "node/genuinely-new"),
+            ]
+        }
+        monkeypatch.setattr(
+            discovery_handler, "OverpassProvider", lambda: _FakeProvider(fake_results)
+        )
+
+        await discovery_handler._run(str(job_id), str(tenant_id), str(run_id))
+
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            updated_run = await session.get(CampaignRun, run_id)
+            assert updated_run.companies_found == 2
+            assert updated_run.duplicates == 1  # phone match merges into the existing company
+            assert updated_run.usable_found == 1  # only the genuinely new one counts
+            assert updated_run.skipped_already_contacted == 1
+    finally:
+        async with admin_factory() as admin_db:
+            tenant = await admin_db.get(Tenant, tenant_id)
+            if tenant is not None:
+                await admin_db.delete(tenant)
+                await admin_db.commit()
+        await admin_engine.dispose()
+
+
+@requires_live_db
+@pytest.mark.asyncio
 async def test_rerunning_discovery_with_same_source_does_not_duplicate_companies(
     app_session_factory, monkeypatch
 ):

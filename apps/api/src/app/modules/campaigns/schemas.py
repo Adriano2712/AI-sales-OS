@@ -66,5 +66,9 @@ class CampaignRunRead(BaseModel):
     analyzed: int
     opportunities: int
     errors: list
+    refill_attempts: int
+    refill_companies_found: int
+    usable_found: int
+    skipped_already_contacted: int
     created_at: datetime
     updated_at: datetime

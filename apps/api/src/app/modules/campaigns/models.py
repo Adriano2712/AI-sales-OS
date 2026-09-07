@@ -60,3 +60,17 @@ class CampaignRun(Base, UUIDPkMixin, TenantScopedMixin, TimestampMixin):
     analyzed: Mapped[int] = mapped_column(Integer, default=0)
     opportunities: Mapped[int] = mapped_column(Integer, default=0)
     errors: Mapped[list] = mapped_column(JSON, default=list)
+    # Fase 8 (Smart Refill). Deliberately separate from companies_found/
+    # validated/duplicates/enriched/analyzed above, which stay exactly what
+    # the original single pass produced (API/dashboard backward-
+    # compatibility) — refill is extra work on top, tracked in its own
+    # fields. refill_attempts=0 means the run hit target_quantity (or had
+    # no workable supply left) without ever needing a second pass.
+    refill_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    refill_companies_found: Mapped[int] = mapped_column(Integer, default=0)
+    # The real, authoritative "did this run hit its target" number — workable
+    # companies (not INVALID, not do_not_contact, not already-contacted
+    # anywhere in the tenant) across the original pass plus any refill
+    # passes. See jobs/handlers/discovery.py::_count_usable_companies.
+    usable_found: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_already_contacted: Mapped[int] = mapped_column(Integer, default=0)

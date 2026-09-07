@@ -1,7 +1,8 @@
 # Discovery Engine
 
 **Status: built (Fase 2), enrichment added (Fase 3), multi-provider (OSM +
-Apify) added post-Fase-8, Google Review + Social Intelligence added (Fase 4).**
+Apify) added post-Fase-8, Google Review + Social Intelligence added (Fase 4),
+Smart Refill added (master-plan Fase 8).**
 
 ```
 Campaign -> Campaign Run -> Discovery Job -> [OSM, Apify] (concurrent) -> Raw Data
@@ -183,3 +184,93 @@ and the cross-provider case,
 Candidate lookup is bounded to the same tenant + segment + city (not the
 whole tenant) — reasonable at this project's scale (~30-35 companies per
 segment per campaign) and avoids needing fuzzy matching inside SQL.
+
+## Master-plan Fase 8: Smart Refill
+
+**The gap this closes**: before this phase, `_run` (`jobs/handlers/discovery.py`)
+ran each provider exactly once per city with `limit=city_target` and marked
+the run `COMPLETED` unconditionally, with no check against whether it
+actually reached `target_quantity` of real, workable companies. A run that
+came up short (many duplicates, invalid/closed businesses, or companies
+already contacted by an earlier campaign) just silently under-delivered.
+
+**Mechanism**: the original single-pass loop is unchanged (extracted into
+`_discover_and_process_city`, reused rather than duplicated) — its output
+still populates `companies_found`/`validated`/`duplicates`/`enriched`/
+`analyzed` exactly as before, zero behavior change, zero regression risk to
+existing tests that assert exact values there. After that pass,
+`_count_usable_companies` computes the real, authoritative number: workable
+companies (not `CompanyStatus.INVALID`, not `do_not_contact`) that also
+aren't already-contacted anywhere in the tenant (an `Opportunity` with a
+tracked `outcome` — `OpportunityOutcome` has no ordering, so `outcome is
+not None` is the only reliable "something happened" check; deliberately
+tenant-wide, not scoped to this campaign run, since a company a *different*
+campaign already contacted must not read as fresh supply just because this
+campaign rediscovered it). If that falls short of `target_quantity`, up to
+`_MAX_REFILL_PASSES` (2) additional passes re-query the *same* configured
+cities with the per-city limit multiplied (`× 2`, `× 3`, ...), reusing the
+exact same city-processing/identity-resolution pipeline. A pass that
+surfaces zero genuinely new company IDs stops the loop immediately
+(`discovery_refill_exhausted`) — no point burning more requests against
+exhausted supply.
+
+**Deliberately out of scope**: expanding to cities/regions *not* in the
+campaign's own configured list. `NATIONWIDE_CITY_SENTINEL` is a real,
+working "expand scope" precedent, but it's Apify-only, all-or-nothing
+(whole country), and silently overriding a campaign's explicit `cities`
+list would violate the operator's own stated targeting intent. Refill only
+asks the same cities harder, never new ones.
+
+**Why "ask harder" can genuinely work, for both providers**: confirmed by
+reading both providers' `search()` implementations, not assumed. Overpass's
+`limit` only truncates a query whose full result set doesn't change — but
+that's exactly the point: `results[:limit]` on a *higher* `limit` surfaces
+the tail elements a lower limit cut off, as long as real supply exceeds
+what was already asked for. Apify's `limit` is passed straight into the
+actor's `run_input` as `maxCrawledPlacesPerSearch` — it genuinely crawls
+more. Neither provider gets asked to re-fetch a *smaller* remaining
+population; both get a real shot at surfacing more of what's actually
+there.
+
+**New `CampaignRun` fields, deliberately separate from the originals**:
+`refill_attempts`, `refill_companies_found`, `usable_found`,
+`skipped_already_contacted`. `companies_found`/`validated`/`duplicates`/
+`enriched`/`analyzed` keep meaning exactly what they meant before this
+phase (API/dashboard backward-compatibility, and the exact values existing
+integration tests assert) — refill activity and the real "did this run hit
+its target" number live in their own fields instead of being folded back
+in.
+
+**Real end-to-end validation, three scenarios against the live database**
+(via a fake provider respecting `limit` like the real Apify actor does,
+and a no-op job queue to isolate the refill logic from the unrelated real
+Redis dependency the chained WEBSITE_ANALYSIS/BUSINESS_ANALYSIS jobs would
+otherwise need):
+
+1. **Real headroom** (12 available, `target_quantity=5`): the original pass
+   found 5, refill passes asked for 10 then (capped by real supply) 12 —
+   confirming a higher `limit` genuinely surfaces more real companies, not
+   just re-processing the same ones.
+2. **Exhausted supply** (2 available, `target_quantity=5`): `companies_found=2`,
+   `usable_found=2`, `refill_attempts=1` — the loop tried exactly once more,
+   found nothing new (same 2 companies re-matched via `MatchConfidence.HIGH`),
+   and stopped immediately rather than wasting a second attempt.
+3. **Already-contacted skip**: a provider re-finds an existing company (HIGH-
+   confidence phone match) that already has `Opportunity.outcome=CONTACTED`,
+   plus one genuinely new company, `target_quantity=2`. Result:
+   `companies_found=2`, `duplicates=1`, but `usable_found=1` and
+   `skipped_already_contacted=1` — the rediscovered, already-contacted
+   company correctly doesn't count toward the campaign's quota, matching
+   spec's own "skip already-contacted/duplicate leads" instruction exactly.
+
+**Real bug found and fixed by this validation, not by a unit test**: the
+first attempt at scenario 2 returned `usable_found=0` even though both
+companies existed with a perfectly workable status. Root cause: `SET LOCAL`
+tenant context is transaction-scoped (the same gotcha this project has hit
+and fixed repeatedly elsewhere) — the last company's `db.commit()` inside
+the original pass ended the transaction `set_tenant_context` was set in,
+and `_count_usable_companies`'s query ran without re-establishing it. RLS
+silently returned zero rows rather than erroring, which is exactly why this
+needed a real query against the real database to catch — a mocked/unit
+test would never have exercised RLS at all. Fixed by re-calling
+`set_tenant_context` immediately before both call sites.
