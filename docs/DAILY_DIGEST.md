@@ -1,8 +1,10 @@
 # Descoberta Diária + Resumo por Email
 
 **Status: built. Descoberta autônoma configurável por campanha adicionada
-(master-plan Fase 9).** Um 4º processo local, opcional — só faz algo quando
-você o deixa rodando (`workers/scheduler.py`), junto com API + worker.
+(master-plan Fase 9). Relatório diário de oportunidades enriquecido +
+contadores de resumo (master-plan Fase 10).** Um 4º processo local,
+opcional — só faz algo quando você o deixa rodando (`workers/scheduler.py`),
+junto com API + worker.
 
 ```
 workers/scheduler.py (tick a cada 15min)
@@ -170,6 +172,64 @@ reaproveitando `_ensure_todays_run` sem nenhuma mudança); (3) tentativa de
 criar campanha autônoma com `target_quantity=11` corretamente rejeitada
 pelo limite de segurança. Tenant descartável limpo ao final (delete em
 cascata via FK, nunca um `DELETE` genérico por `tenant_id`).
+
+## Master-plan Fase 10: Relatório Diário de Oportunidades enriquecido
+
+**Achado real durante a auditoria desta fase (não por um teste): o digest
+nunca era enviado para as campanhas autônomas da Fase 9.**
+`_maybe_send_pending_digests` filtrava só `Campaign.name.like("Descoberta
+Diária (auto)%")` — o nome sintético que só `_get_or_create_daily_campaign`
+(o piloto) cria. Uma campanha real de qualquer tenant com
+`auto_discovery_enabled=True` (Fase 9) nunca batia nesse filtro — o
+`DISCOVERY` disparava normalmente, mas o tenant nunca recebia email
+nenhum sobre o resultado. Corrigido: o filtro agora aceita `OR
+Campaign.auto_discovery_enabled.is_(True)`, e uma nova varredura
+tenant-agnóstica (`_send_pending_digests_all_tenants`, mesmo desenho de
+"varrer todo tenant, isolar falha por item" já usado no retry sweep e na
+varredura de descoberta autônoma) roda a cada tick — não só para o tenant
+piloto. `_tick` continua chamando `_maybe_send_pending_digests`
+diretamente também (intocado, redundante mas inofensivo pro tenant
+piloto — a checagem de idempotência via `audit_log` evita reenvio).
+
+**Campos ricos por lead** (`DigestCompanyEntry`, `notifications/digest.py`)
+— tudo já estava carregado em memória em `_send_digest_for_run`, nenhuma
+query nova: `opportunity_score`/`confidence` (Fase 7), `service_fit_score`
+(Fase 6), `buying_potential_summary` (Fase 6, linguagem de sinal já
+validada na origem), `google_rating`/`google_review_count`/`instagram_url`
+(Fase 4), `reasons` (motivos da oportunidade). Todos opcionais — uma
+empresa cuja análise ainda não chegou naquele estágio simplesmente não
+mostra a linha, nunca um valor inventado.
+
+**Contadores de resumo** (`DigestSummary`, `build_digest_summary` — função
+pura, testada isoladamente): total de oportunidades, quebra por
+classificação (HIGH/GOOD/REVIEW/LOW), quantas ainda sem classificação
+("ainda em análise", nunca somadas como LOW), e score médio de
+oportunidade (calculado só sobre quem já tem score real). Aparece como uma
+linha "Resumo:" no topo do email, antes da lista de empresas.
+
+**Diagnóstico de sites também ficou mais honesto**: `SiteDiagnosticEntry`
+ganhou `website_status` (Fase 5) — quando não há `digital_score`, o email
+agora diz *por quê* (bloqueio automático, timeout, domínio não encontrado,
+etc.) em vez de um genérico "ainda em análise" que confundia falha real
+com análise pendente. Mantém a regra absoluta da Fase 5 explicitamente na
+própria redação do email: um bloqueio anti-bot nunca soa como "site ruim".
+
+**Compatibilidade**: `build_digest_subject/text/html` mantêm as mesmas
+assinaturas — `summary` é um parâmetro novo e opcional (`None` por
+padrão), então qualquer chamador antigo continua funcionando sem
+alteração. `DigestCompanyEntry`/`SiteDiagnosticEntry` só ganharam campos
+com valores padrão — nenhum teste ou fixture existente precisou mudar.
+
+**Validação real end-to-end**, tenant descartável dedicado (nunca o tenant
+real — ver o incidente da Fase 8): duas empresas reais, uma com dados ricos
+completos (rating do Google, Instagram, `buying_potential_summary`,
+motivos) e outra com o site bloqueado por anti-bot. O email de negócio
+mostrou corretamente "Resumo: 2 oportunidade(s) (1 HIGH, 1 ainda em
+análise) — score médio de oportunidade: 82.3" e todos os campos ricos da
+primeira empresa; o email de sites mostrou "bloqueio automático detectado —
+não foi possível confirmar o conteúdo real" para a segunda, nunca "site
+ruim" nem "ainda em análise" genérico. Tenant descartável limpo ao final via
+cascade de FK.
 
 ## Limitação conhecida (aceita, não corrigida — escopo de piloto)
 

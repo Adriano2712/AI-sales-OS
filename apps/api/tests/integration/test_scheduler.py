@@ -447,6 +447,137 @@ async def test_maybe_send_pending_digests_sends_once_and_marks_sent(
 
 @requires_live_db
 @pytest.mark.asyncio
+async def test_maybe_send_pending_digests_covers_autonomous_non_pilot_campaigns(
+    app_session_factory, monkeypatch
+):
+    """Fase 10 fix for a real gap found during this phase's own audit: a
+    Fase 9 auto_discovery_enabled campaign (any real name, not the pilot's
+    "Descoberta Diária (auto)" prefix) previously never matched
+    _maybe_send_pending_digests' WHERE clause at all — its completed runs
+    triggered discovery but the tenant got zero email about it, ever."""
+    import scheduler
+
+    tenant_id = uuid.uuid4()
+    admin_engine = create_async_engine(ADMIN_DATABASE_URL)
+    admin_factory = async_sessionmaker(admin_engine, expire_on_commit=False, class_=AsyncSession)
+
+    from app.modules.tenancy.models import Tenant
+
+    async with admin_factory() as admin_db:
+        tenant = Tenant(id=tenant_id, name=f"Autonomous Digest Tenant {uuid.uuid4().hex[:6]}")
+        admin_db.add(tenant)
+        await admin_db.commit()
+
+    sent_emails = []
+
+    def _fake_send_email(smtp_user, smtp_app_password, to_address, subject, text_body, html_body=None):
+        sent_emails.append({"to": to_address, "subject": subject})
+
+    monkeypatch.setattr(scheduler, "send_email", _fake_send_email)
+    monkeypatch.setattr(scheduler.get_settings(), "gmail_smtp_user", "sender@test.com")
+    monkeypatch.setattr(scheduler.get_settings(), "gmail_smtp_app_password", "fake-app-password")
+    monkeypatch.setattr(scheduler.get_settings(), "daily_digest_recipient_email", "recipient@test.com")
+
+    try:
+        async with app_session_factory() as session:
+            await set_tenant_context(session, tenant_id)
+            campaign = Campaign(
+                tenant_id=tenant_id,
+                name="Minha Campanha de Clínicas",  # deliberately NOT the pilot's name prefix
+                segment="clinics",
+                cities=["Votorantim"],
+                state="SP",
+                country="BR",
+                target_quantity=5,
+                auto_discovery_enabled=True,
+                status=CampaignStatus.ACTIVE,
+            )
+            session.add(campaign)
+            await session.flush()
+
+            long_ago = datetime.now(UTC) - timedelta(hours=2)
+            run = CampaignRun(
+                tenant_id=tenant_id,
+                campaign_id=campaign.id,
+                status=CampaignRunStatus.COMPLETED,
+                started_at=long_ago,
+                finished_at=long_ago,
+                companies_found=1,
+            )
+            session.add(run)
+            await session.commit()
+
+            await set_tenant_context(session, tenant_id)
+            await scheduler._maybe_send_pending_digests(session, tenant_id)
+
+            assert len(sent_emails) == 2  # business summary + site diagnostics, same as the pilot
+    finally:
+        async with admin_factory() as admin_db:
+            tenant = await admin_db.get(Tenant, tenant_id)
+            if tenant is not None:
+                await admin_db.delete(tenant)
+                await admin_db.commit()
+        await admin_engine.dispose()
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_send_pending_digests_all_tenants_covers_every_tenant(
+    app_session_factory, monkeypatch, two_tenants
+):
+    """Fase 10: same shape/reasoning as the retry sweep and the Fase 9
+    autonomous-discovery sweep — digest sending must apply to every
+    tenant with a pending completed run, not just DAILY_DISCOVERY_TENANT_ID."""
+    import scheduler
+
+    sent_emails = []
+
+    def _fake_send_email(smtp_user, smtp_app_password, to_address, subject, text_body, html_body=None):
+        sent_emails.append(to_address)
+
+    monkeypatch.setattr(scheduler, "send_email", _fake_send_email)
+    monkeypatch.setattr(scheduler.get_settings(), "gmail_smtp_user", "sender@test.com")
+    monkeypatch.setattr(scheduler.get_settings(), "gmail_smtp_app_password", "fake-app-password")
+    monkeypatch.setattr(scheduler.get_settings(), "daily_digest_recipient_email", "recipient@test.com")
+
+    tenant_a, tenant_b = two_tenants
+    long_ago = datetime.now(UTC) - timedelta(hours=2)
+
+    async with app_session_factory() as session:
+        for tenant in (tenant_a, tenant_b):
+            await set_tenant_context(session, tenant.id)
+            campaign = Campaign(
+                tenant_id=tenant.id,
+                name=f"Campanha Autônoma {tenant.id.hex[:6]}",
+                segment="restaurants",
+                cities=["Sorocaba"],
+                state="SP",
+                country="BR",
+                target_quantity=5,
+                auto_discovery_enabled=True,
+                status=CampaignStatus.ACTIVE,
+            )
+            session.add(campaign)
+            await session.flush()
+            session.add(
+                CampaignRun(
+                    tenant_id=tenant.id,
+                    campaign_id=campaign.id,
+                    status=CampaignRunStatus.COMPLETED,
+                    started_at=long_ago,
+                    finished_at=long_ago,
+                )
+            )
+            await session.commit()
+
+    await scheduler._send_pending_digests_all_tenants()
+
+    # 2 emails per tenant (business + site diagnostics) x 2 tenants.
+    assert len(sent_emails) == 4
+
+
+@requires_live_db
+@pytest.mark.asyncio
 async def test_maybe_send_pending_digests_skips_when_email_not_configured(
     app_session_factory, monkeypatch, two_tenants
 ):

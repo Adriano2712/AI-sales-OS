@@ -73,3 +73,38 @@ def test_html_escapes_company_name():
 def test_html_empty_is_honest():
     html = build_site_digest_html([], "03/09/2026", "clinics")
     assert "Nenhuma empresa nova" in html
+
+
+# --- Fase 10: website_status explains *why* no score, honestly ---------
+
+
+def test_text_blocked_status_never_reads_as_a_bad_site():
+    """The absolute rule (Fase 5), extended to the digest's own wording: a
+    real anti-bot block must never be phrased as if the site were bad or
+    even just "still analyzing" — the reader should know evidence was
+    insufficient, not that nothing happened yet."""
+    entry = _entry(digital_score=None, problems=[], ai_diagnostic=None, website_status="BLOCKED")
+    text = build_site_digest_text([entry], "03/09/2026", "clinics")
+    assert "bloqueio automático" in text
+    assert "ainda em análise" not in text
+    assert "None" not in text
+
+
+def test_text_timeout_status_is_distinguishable_from_pending_analysis():
+    entry = _entry(digital_score=None, problems=[], ai_diagnostic=None, website_status="TIMEOUT")
+    text = build_site_digest_text([entry], "03/09/2026", "clinics")
+    assert "não respondeu a tempo" in text
+
+
+def test_text_unrecognized_status_falls_back_to_pending_not_a_crash():
+    """A future WebsiteStatus value this module doesn't have a label for
+    yet must degrade gracefully, never raise."""
+    entry = _entry(digital_score=None, problems=[], ai_diagnostic=None, website_status="GOOD")
+    text = build_site_digest_text([entry], "03/09/2026", "clinics")
+    assert "None" not in text  # doesn't crash or print the raw enum oddly
+
+
+def test_html_blocked_status_is_escaped_and_present():
+    entry = _entry(digital_score=None, problems=[], ai_diagnostic=None, website_status="BLOCKED")
+    html = build_site_digest_html([entry], "03/09/2026", "clinics")
+    assert "bloqueio automático" in html

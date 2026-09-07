@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "api" / "src"))
 
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import or_, select  # noqa: E402
 
 from app.core import model_registry  # noqa: E402,F401
 from app.core.config import get_settings  # noqa: E402
@@ -49,6 +49,7 @@ from app.modules.notifications.digest import (  # noqa: E402
     DigestCompanyEntry,
     build_digest_html,
     build_digest_subject,
+    build_digest_summary,
     build_digest_text,
 )
 from app.modules.notifications.email_sender import EmailSendError, send_email  # noqa: E402
@@ -192,14 +193,27 @@ async def _send_digest_for_run(db, tenant_id: uuid.UUID, run: CampaignRun, campa
                     if opportunity and opportunity.classification
                     else None
                 ),
+                # Fase 10 — every field below is already on `opportunity`/
+                # `analysis`/`company`, already fetched above: zero new
+                # queries, just surfacing data the digest previously
+                # ignored.
+                opportunity_score=opportunity.opportunity_score if opportunity else None,
+                opportunity_confidence=opportunity.confidence if opportunity else None,
+                service_fit_score=analysis.service_fit_score if analysis else None,
+                buying_potential_summary=analysis.buying_potential_summary if analysis else None,
+                google_rating=company.google_rating,
+                google_review_count=company.google_review_count,
+                instagram_url=company.instagram_url,
+                reasons=list(opportunity.reasons) if opportunity and opportunity.reasons else [],
             )
         )
 
     date_str = run.started_at.astimezone(_TZ).strftime("%d/%m/%Y") if run.started_at else "—"
     settings = get_settings()
+    summary = build_digest_summary(entries)
     subject = build_digest_subject(date_str, campaign.segment, len(entries))
-    text_body = build_digest_text(entries, date_str, campaign.segment)
-    html_body = build_digest_html(entries, date_str, campaign.segment)
+    text_body = build_digest_text(entries, date_str, campaign.segment, summary=summary)
+    html_body = build_digest_html(entries, date_str, campaign.segment, summary=summary)
 
     assert settings.gmail_smtp_user and settings.gmail_smtp_app_password
     assert settings.daily_digest_recipient_email
@@ -272,6 +286,11 @@ async def _send_site_diagnostic_for_run(
                 digital_score=analysis.digital_score if analysis else None,
                 problems=(analysis.findings.get("problems") or []) if analysis else [],
                 ai_diagnostic=(analysis.findings.get("ai_diagnostic") if analysis else None),
+                # Fase 10 — already on `analysis`, zero new query. Lets the
+                # digest say *why* no digital_score exists (see
+                # site_digest.py's _digital_score_line) instead of a
+                # generic "ainda em análise" for a BLOCKED/TIMEOUT site.
+                website_status=analysis.status.value if analysis else None,
             )
         )
 
@@ -323,7 +342,16 @@ async def _maybe_send_pending_digests(db, tenant_id: uuid.UUID) -> None:
         .join(Campaign, CampaignRun.campaign_id == Campaign.id)
         .where(
             CampaignRun.tenant_id == tenant_id,
-            Campaign.name.like(f"{_CAMPAIGN_NAME_PREFIX}%"),
+            # Fase 10 fix: this used to match ONLY the pilot's own
+            # synthetic campaign name — a real bug found during this
+            # phase's audit, not by a test. Fase 9's auto_discovery_enabled
+            # campaigns (any tenant, any name) got zero digest email ever,
+            # since nothing about their completed runs matched this
+            # name-prefix filter. Now matches either.
+            or_(
+                Campaign.name.like(f"{_CAMPAIGN_NAME_PREFIX}%"),
+                Campaign.auto_discovery_enabled.is_(True),
+            ),
             CampaignRun.status == CampaignRunStatus.COMPLETED,
             CampaignRun.started_at <= cutoff,
         )
@@ -336,6 +364,30 @@ async def _maybe_send_pending_digests(db, tenant_id: uuid.UUID) -> None:
             await _send_digest_for_run(db, tenant_id, run, campaign)
         if not await _site_diagnostic_already_sent(db, tenant_id, run.id):
             await _send_site_diagnostic_for_run(db, tenant_id, run, campaign)
+
+
+async def _send_pending_digests_all_tenants() -> None:
+    """Fase 10: same tenant-agnostic shape as _retry_stuck_jobs_all_tenants
+    below — closes the gap where Fase 9's auto_discovery_enabled campaigns
+    (any tenant, not just DAILY_DISCOVERY_TENANT_ID) previously got their
+    runs triggered but never got a digest email, since
+    _maybe_send_pending_digests was only ever called from _tick for the
+    one hardcoded pilot tenant. _tick's own call is left exactly as-is
+    (still real, already-validated production usage) — this runs
+    alongside it, not instead of it; calling _maybe_send_pending_digests
+    twice for the pilot tenant on the same tick is redundant but harmless
+    (its own idempotency checks via audit_log make a second call a no-op)."""
+    async with async_session_factory() as db:
+        result = await db.execute(select(Tenant.id))  # tenants table has no RLS
+        tenant_ids = [row[0] for row in result.all()]
+
+    for tenant_id in tenant_ids:
+        async with async_session_factory() as db:
+            try:
+                await set_tenant_context(db, tenant_id)
+                await _maybe_send_pending_digests(db, tenant_id)
+            except Exception as exc:  # noqa: BLE001 - one tenant's failure must not skip the rest
+                logger.error("daily_digest_sweep_failed", tenant_id=str(tenant_id), error=str(exc))
 
 
 async def _retry_stuck_jobs(db, tenant_id: uuid.UUID) -> None:
@@ -538,6 +590,15 @@ async def main() -> None:
             await _trigger_autonomous_campaign_runs_all_tenants()
         except Exception as exc:  # noqa: BLE001 - one bad sweep must not kill the scheduler
             logger.error("autonomous_discovery_sweep_failed", error=str(exc))
+
+        # Fase 10: digest emails for every tenant's completed runs, not
+        # just the pilot's — closes the gap where an autonomous
+        # (non-pilot) campaign's run completed and triggered but the
+        # tenant never got a report about it.
+        try:
+            await _send_pending_digests_all_tenants()
+        except Exception as exc:  # noqa: BLE001 - one bad sweep must not kill the scheduler
+            logger.error("daily_digest_sweep_failed", error=str(exc))
 
         try:
             await _retry_stuck_jobs_all_tenants()
