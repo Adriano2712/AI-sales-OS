@@ -1,8 +1,8 @@
 # Dashboard
 
-**Status: built (Fase 7).** Answers spec section 46's question — "Com quem
-devo falar?" — by completing what Fase 6's `/opportunities` page already
-covered, not duplicating it.
+**Status: built (Fase 7 API, Fase 11 frontend).** Answers spec section 46's
+question — "Com quem devo falar?" — by completing what Fase 6's
+`/opportunities` page already covered, not duplicating it.
 
 ```
 GET /api/v1/opportunities (score/confidence/segment/city/status/type filters)
@@ -44,6 +44,22 @@ wrote:
   honestly means "nothing tracked yet," not a bug.
 - **Cost**: real sum of `ai_calls.estimated_cost_usd` (not an estimate —
   logged per-call since Fase 0).
+
+## Fase 11 — closing the frontend gap
+
+`apps/web/src/app/(app)/dashboard/page.tsx` (the real page rendering this
+data) was last touched before Fase 2 and never picked up `problem` — spec
+section 46 lists "problema" as a required dashboard field, right alongside
+"solução", but the table only ever rendered `potential_solution`. The API
+(`OpportunityRead.problem`) and the frontend type
+(`OpportunityDetail.problem`) already carried it — `/opportunities/[id]`
+already renders it — it just wasn't wired into the dashboard table. Added
+the missing "Problema" column, same `opportunity.problem ?? "—"` pattern
+already proven correct on the detail page. No backend change, no new
+endpoint, no schema change: every other spec section 46 field and filter
+(score, confidence, empresa, segmento, cidade, solução, próxima ação;
+filters for score/confidence/segmento/cidade/status/type) was already
+correctly wired.
 
 ## Real finding
 

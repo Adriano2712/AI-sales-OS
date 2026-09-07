@@ -216,6 +216,7 @@ export default async function DashboardPage({
                 <th className={tableCell}>Score</th>
                 <th className={tableCell}>Confiança</th>
                 <th className={tableCell}>Classificação</th>
+                <th className={tableCell}>Problema</th>
                 <th className={tableCell}>Solução potencial</th>
                 <th className={`${tableCell} pr-4`}>Próxima ação</th>
               </tr>
@@ -255,6 +256,7 @@ export default async function DashboardPage({
                       "—"
                     )}
                   </td>
+                  <td className={`${tableCell} max-w-xs text-gray-600`}>{opportunity.problem ?? "—"}</td>
                   <td className={`${tableCell} max-w-xs text-gray-600`}>
                     {opportunity.potential_solution ?? "—"}
                   </td>
