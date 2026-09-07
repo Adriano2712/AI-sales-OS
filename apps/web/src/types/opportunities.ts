@@ -53,6 +53,17 @@ export interface DashboardSummary {
     duplicates: number;
     enriched: number;
     analyzed: number;
+    invalid: number;
+  };
+  enrichment: {
+    website_found: number;
+    website_not_found: number;
+    success_rate: number | null;
+  };
+  analysis: {
+    companies_analyzed: number;
+    average_digital_score: number | null;
+    average_business_fit: number | null;
   };
   opportunities: {
     total: number;
@@ -62,14 +73,19 @@ export interface DashboardSummary {
     low: number;
   };
   funnel: {
+    approved: number;
     contacted: number;
     replied: number;
     proposal_sent: number;
     won: number;
     lost: number;
+    meetings: number | null;
   };
   cost: {
     total_estimated_cost_usd: number;
     ai_calls: number;
+    cost_per_company: number | null;
+    cost_per_analysis: number | null;
+    cost_per_opportunity: number | null;
   };
 }

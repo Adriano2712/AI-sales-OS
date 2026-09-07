@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { href: "/campaigns", label: "Campanhas" },
   { href: "/companies", label: "Empresas" },
   { href: "/opportunities", label: "Oportunidades" },
+  { href: "/analytics", label: "Analytics" },
 ] as const;
 
 export function Sidebar({ email }: { email: string }) {

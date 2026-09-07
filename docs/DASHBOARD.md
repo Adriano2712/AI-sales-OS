@@ -45,6 +45,13 @@ wrote:
 - **Cost**: real sum of `ai_calls.estimated_cost_usd` (not an estimate —
   logged per-call since Fase 0).
 
+Fase 12 extended this same endpoint with the rest of spec section 83
+(invalid companies, enrichment success rate, average scores, approved
+count, cost-per-unit breakdowns) and added a separate `/analytics` frontend
+page for the full breakdown — see docs/ANALYTICS.md. `/dashboard` itself
+keeps showing only the subset relevant to "quem devo falar" (spec section
+46), not the full metrics dump.
+
 ## Fase 11 — closing the frontend gap
 
 `apps/web/src/app/(app)/dashboard/page.tsx` (the real page rendering this
