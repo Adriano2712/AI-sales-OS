@@ -18,7 +18,32 @@ class OverpassProvider(DiscoveryProvider):
     existing as an OSM administrative boundary with that exact name — if it
     doesn't, this returns an empty list (not an error; that's a legitimate
     "no coverage here" outcome the Fase 9 experiment is partly designed to
-    measure, see docs/DISCOVERY.md)."""
+    measure, see docs/DISCOVERY.md).
+
+    City names collide across countries ("San Antonio" is a real place in
+    Texas, Chile, and the Philippines, among others — confirmed the hard way
+    running a real "San Antonio" campaign against country="US" and getting 3
+    real restaurants back from Makati, Philippines). The city-name match is
+    therefore always constrained to the target country first, using the
+    ISO3166-1 tag OSM's own country boundaries carry — `country` is
+    validated elsewhere (CampaignCreate) to always be a 2-letter code, so
+    this is a real filter, not a guess.
+
+    Getting the containment filter right took two tries against the real
+    API: `area["name"=city](area.country)` — filtering one `area` statement
+    by another — silently does nothing (Overpass only applies `(area.X)`
+    containment to node/way/relation/nwr statements, not to another `area`
+    statement; confirmed live — it kept returning the same wrong Manila
+    results with that syntax). The working pattern queries the city's
+    boundary as `relation`/`way` elements *filtered* by `(area.country)`,
+    then converts the match to an area with `map_to_area` before the actual
+    `nwr[...]` search runs against it. `state` is NOT similarly nested: it
+    is only conventionally a 2-letter code in this project, never enforced
+    (CampaignCreate allows up to 100 chars), and OSM's ISO3166-2 coverage on
+    state/province boundaries is inconsistent enough worldwide that
+    requiring it would risk turning existing working BR campaigns into
+    silent empty results — country-level disambiguation is the fix for the
+    actual bug observed, not a proxy for full precision."""
 
     name = "overpass"
 
@@ -49,7 +74,7 @@ class OverpassProvider(DiscoveryProvider):
                 "app.modules.discovery.segment_mapping.SEGMENT_TO_OSM_TAGS"
             )
 
-        query = self._build_query(city, tags)
+        query = self._build_query(city, country, tags)
 
         try:
             async with httpx.AsyncClient(
@@ -69,14 +94,20 @@ class OverpassProvider(DiscoveryProvider):
         return results[:limit]
 
     @staticmethod
-    def _build_query(city: str, tags: list[tuple[str, str]]) -> str:
+    def _build_query(city: str, country: str, tags: list[tuple[str, str]]) -> str:
         escaped_city = city.replace('"', '\\"')
+        escaped_country = country.replace('"', '\\"')
         tag_clauses = "\n  ".join(
             f'nwr["{key}"="{value}"](area.searchArea);' for key, value in tags
         )
         return (
             "[out:json][timeout:25];\n"
-            f'area["name"="{escaped_city}"]["boundary"="administrative"]->.searchArea;\n'
+            f'area["ISO3166-1"="{escaped_country}"][admin_level=2]->.country;\n'
+            "(\n"
+            f'  relation["name"="{escaped_city}"]["boundary"="administrative"](area.country);\n'
+            f'  way["name"="{escaped_city}"]["boundary"="administrative"](area.country);\n'
+            ")->.cityElements;\n"
+            ".cityElements map_to_area->.searchArea;\n"
             f"(\n  {tag_clauses}\n);\n"
             "out center tags;"
         )

@@ -64,6 +64,23 @@ def test_to_raw_company_leaves_instagram_none_when_absent():
     assert result.instagram is None
 
 
+def test_build_query_constrains_city_boundary_to_country_area():
+    """Real bug found running against live Overpass (post-Fase-10 San
+    Antonio campaign): a bare city-name area match found a "San Antonio" in
+    Makati, Philippines instead of Texas, because city names collide across
+    countries. Filtering one `area` statement by another (`area[...]
+    (area.country)`) turned out to be a silent no-op against the real API
+    (confirmed live — same wrong Manila results came back). The working
+    pattern filters the city's `relation`/`way` boundary elements by
+    `(area.country)` first, then converts the match to an area with
+    `map_to_area`."""
+    query = OverpassProvider._build_query("San Antonio", "US", [("amenity", "restaurant")])
+    assert 'area["ISO3166-1"="US"][admin_level=2]->.country;' in query
+    assert 'relation["name"="San Antonio"]["boundary"="administrative"](area.country);' in query
+    assert 'way["name"="San Antonio"]["boundary"="administrative"](area.country);' in query
+    assert ".cityElements map_to_area->.searchArea;" in query
+
+
 @pytest.mark.asyncio
 async def test_search_rejects_nationwide_sentinel():
     """Overpass has no equivalent to Apify's whole-country search — a
