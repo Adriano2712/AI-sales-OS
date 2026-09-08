@@ -11,6 +11,7 @@ def _company(**overrides) -> Company:
         google_rating=None,
         google_review_count=None,
         instagram_url=None,
+        email=None,
     )
     defaults.update(overrides)
     return Company(**defaults)
@@ -98,6 +99,25 @@ def test_fills_instagram_when_company_has_none():
     filled = merge_missing_fields(company, raw)
     assert filled == ["instagram_url"]
     assert company.instagram_url == "https://instagram.com/restaurantex"
+
+
+def test_fills_email_when_company_has_none():
+    """Real gap found during the automation-planning session:
+    `Company.email` existed but nothing ever wrote to it -- now filled the
+    same way phone/website/instagram already were."""
+    company = _company()
+    raw = _raw(email="contato@restaurantex.com.br")
+    filled = merge_missing_fields(company, raw)
+    assert filled == ["email"]
+    assert company.email == "contato@restaurantex.com.br"
+
+
+def test_never_overwrites_an_existing_email():
+    company = _company(email="original@restaurantex.com.br")
+    raw = _raw(email="different@restaurantex.com.br")
+    filled = merge_missing_fields(company, raw)
+    assert filled == []
+    assert company.email == "original@restaurantex.com.br"
 
 
 def test_never_overwrites_existing_google_review_data():

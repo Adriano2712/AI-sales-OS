@@ -113,6 +113,27 @@ async def analyze_website(
         found_email = next((page.email for page in pages if page.email), None)
         if found_email:
             company.email = found_email
+            # Real gap found during the automation-planning session: every
+            # other core field (phone/website/instagram) gets an
+            # auditable Evidence row when found, via enrichment's
+            # _record_core_field_evidence — this fill happens later (after
+            # discovery's own enrich_company already ran and recorded an
+            # UNKNOWN claim for email, since no site had been fetched yet)
+            # and was leaving no trail at all. A distinct claim, kept side
+            # by side with that earlier UNKNOWN one rather than overwriting
+            # it — an honest record of what was known at each point.
+            await get_or_create_evidence(
+                db,
+                tenant_id,
+                company.id,
+                claim=f"email (via site): {found_email}",
+                source="website_crawler",
+                confidence=EvidenceConfidence.HIGH,
+                polarity=EvidencePolarity.POSITIVE,
+                category=EvidenceCategory.CONTACTABILITY,
+                source_url=website.url,
+                supporting_data={"field": "email", "value": found_email},
+            )
 
     sub_scores = compute_sub_scores(pages)
     raw_quality_score = compute_digital_score(sub_scores)

@@ -31,6 +31,26 @@ def test_to_raw_company_finds_phone_under_mobile_tag():
     assert result.phone == "+55 15 99601 2075"
 
 
+def test_to_raw_company_finds_email_under_contact_prefixed_tag():
+    """Real gap found during the automation-planning session:
+    `Company.email` existed but nothing wrote to it -- OSM's own
+    contact:email/email tag now flows through the same _first_present path
+    already used for phone/website, not just into supplementary Evidence."""
+    element = {
+        "type": "node",
+        "id": 456,
+        "tags": {"name": "Restaurante Teste", "contact:email": "contato@restauranteteste.com"},
+    }
+    result = OverpassProvider._to_raw_company(element, "restaurants", "Sorocaba", "SP", "BR")
+    assert result.email == "contato@restauranteteste.com"
+
+
+def test_to_raw_company_leaves_email_none_when_absent():
+    element = {"type": "node", "id": 789, "tags": {"name": "Sem Contato"}}
+    result = OverpassProvider._to_raw_company(element, "restaurants", "Sorocaba", "SP", "BR")
+    assert result.email is None
+
+
 def test_to_raw_company_finds_website_under_url_tag():
     element = {
         "type": "node",

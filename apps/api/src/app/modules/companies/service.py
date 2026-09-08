@@ -102,6 +102,15 @@ class NormalizedRawCompany:
     google_rating: float | None = None
     google_review_count: int | None = None
     instagram: str | None = None
+    # Real gap found running the automation-planning session: `Company.email`
+    # existed as a column but nothing ever wrote to it — OSM's own
+    # contact:email/email tag was captured only as supplementary Evidence,
+    # never promoted to a real field. Same asymmetry as instagram: only
+    # Overpass reports this (Apify's real Google Maps payload has no email
+    # field, confirmed against captured samples) — never guessed when
+    # absent. The other real source (scraping a mailto: link off the
+    # company's own website) is a separate step, see website_analysis.
+    email: str | None = None
     raw_data: dict = field(default_factory=dict)
 
     @property
@@ -235,6 +244,9 @@ def merge_missing_fields(company: Company, raw: NormalizedRawCompany) -> list[st
     if not company.instagram_url and raw.instagram:
         company.instagram_url = raw.instagram
         filled.append("instagram_url")
+    if not company.email and raw.email:
+        company.email = raw.email
+        filled.append("email")
     return filled
 
 
@@ -284,6 +296,7 @@ async def upsert_company_from_raw(
         google_rating=raw.google_rating,
         google_review_count=raw.google_review_count,
         instagram_url=raw.instagram,
+        email=raw.email,
         # A place a provider reports as permanently closed is discovered
         # already-invalid, not DISCOVERED-then-manually-corrected — real,
         # observed signal (Apify), not an inference (spec section 15/35).

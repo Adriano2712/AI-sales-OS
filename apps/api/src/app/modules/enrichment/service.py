@@ -18,7 +18,6 @@ from app.modules.evidence.service import get_or_create_evidence
 # NEUTRAL/OTHER rather than crashing — but should get a real entry here.
 _SUPPLEMENTARY_FIELD_SIGNAL: dict[str, tuple[EvidencePolarity, EvidenceCategory]] = {
     "opening_hours": (EvidencePolarity.NEUTRAL, EvidenceCategory.BUSINESS_STATUS),
-    "email": (EvidencePolarity.POSITIVE, EvidenceCategory.CONTACTABILITY),
     "facebook": (EvidencePolarity.POSITIVE, EvidenceCategory.SOCIAL_PRESENCE),
     "cuisine": (EvidencePolarity.NEUTRAL, EvidenceCategory.OTHER),
     "category": (EvidencePolarity.NEUTRAL, EvidenceCategory.OTHER),
@@ -32,17 +31,18 @@ _SUPPLEMENTARY_FIELD_SIGNAL: dict[str, tuple[EvidencePolarity, EvidenceCategory]
 # future addition — see docs/DISCOVERY.md's note on this phase's scope.
 _SUPPLEMENTARY_TAG_SOURCES: dict[str, list[str]] = {
     "opening_hours": ["opening_hours"],
-    "email": ["contact:email", "email"],
     "facebook": ["contact:facebook", "facebook"],
     "cuisine": ["cuisine"],
 }
-# instagram is deliberately absent here (Fase 4): it's now a core field —
-# read from company.instagram_url (set at discovery time, see
-# discovery/providers/overpass.py) and always gets an evidence row either
-# way via _record_core_field_evidence, the same treatment as phone/website.
-# The master spec explicitly lists "Instagram not found" as an UNKNOWN
-# example — the old supplementary path silently emitted no evidence at all
-# when absent, which doesn't satisfy that.
+# instagram and (as of the automation-planning session) email are
+# deliberately absent here: both are now core fields — read from
+# company.instagram_url / company.email (set at discovery time, see
+# discovery/providers/overpass.py, and — for email — also filled from the
+# company's own website during website analysis) and always get an
+# evidence row either way via _record_core_field_evidence, the same
+# treatment as phone/website. The master spec explicitly lists "Instagram
+# not found" as an UNKNOWN example — the old supplementary path silently
+# emitted no evidence at all when absent, which doesn't satisfy that.
 
 
 def extract_supplementary_fields(osm_tags: dict[str, str]) -> dict[str, str]:
@@ -197,6 +197,17 @@ async def enrich_company(
             provider,
             source_url,
             category=EvidenceCategory.SOCIAL_PRESENCE,
+        ),
+        # Real (not yet always known) at this point: only OSM's own
+        # contact:email/email tag can have filled this by discovery time —
+        # the other real source (the company's own website) hasn't been
+        # fetched yet at all (website_analysis runs later, chained after
+        # this). An UNKNOWN claim recorded here is an honest snapshot of
+        # what was known when discovery finished, not a final answer — see
+        # website_analysis's own email extraction for the distinct,
+        # later-recorded claim when a site provides one.
+        await _record_core_field_evidence(
+            db, tenant_id, company, "email", company.email, provider, source_url
         ),
         await _record_google_reviews_evidence(db, tenant_id, company, provider, source_url),
     ]
