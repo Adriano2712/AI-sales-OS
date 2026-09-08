@@ -1,7 +1,11 @@
 import pytest
 from pydantic import ValidationError
 
-from app.modules.business_analysis.ai_analyst import BusinessAnalysisAIOutput, build_ai_request
+from app.modules.business_analysis.ai_analyst import (
+    BusinessAnalysisAIOutput,
+    _coerce_string_list,
+    build_ai_request,
+)
 
 
 def _valid_output_kwargs(**overrides) -> dict:
@@ -52,6 +56,81 @@ def test_output_schema_accepts_signal_based_phrasing_containing_the_word_buy():
         )
     )
     assert "buy" in output.buying_potential_summary.lower()
+
+
+def test_output_schema_accepts_a_real_list_unchanged():
+    output = BusinessAnalysisAIOutput(
+        **_valid_output_kwargs(findings=["Real finding one.", "Real finding two."])
+    )
+    assert output.findings == ["Real finding one.", "Real finding two."]
+
+
+def test_output_schema_recovers_item_tagged_string_output():
+    """Real failure caught running the Denver campaign (Fase 13/14): under
+    forced tool-use, Claude sometimes returns `findings`/`problems` as a
+    single string of <item> tags instead of a real JSON array. Must recover
+    the real content, not just reject the whole analysis."""
+    malformed = "\n<item>Website status is UNKNOWN.</item>\n<item>No reviews found.</item>\n</problems>\n"
+    output = BusinessAnalysisAIOutput(**_valid_output_kwargs(problems=malformed))
+    assert output.problems == ["Website status is UNKNOWN.", "No reviews found."]
+
+
+def test_output_schema_recovers_bare_unknown_tag_as_single_entry():
+    """Real second failure shape from the same validation: no <item>
+    wrapping at all, just a bare tag with no real content -- the tag itself
+    carries no information worth keeping, so this becomes an empty list
+    rather than a fabricated single entry."""
+    output = BusinessAnalysisAIOutput(**_valid_output_kwargs(findings="\n<UNKNOWN>\n"))
+    assert output.findings == []
+
+
+def test_output_schema_recovers_string_with_leaked_tool_call_tags():
+    """Real third failure shape: a stray `</invoke>` tag leaking from the
+    tool-call format itself, mixed in with real <item> content."""
+    malformed = "\n<item>Digital presence is minimal.</item>\n</problems>\n</invoke>\n"
+    output = BusinessAnalysisAIOutput(**_valid_output_kwargs(problems=malformed))
+    assert output.problems == ["Digital presence is minimal."]
+
+
+def test_coerce_string_list_leaves_real_lists_unchanged():
+    assert _coerce_string_list(["a", "b"]) == ["a", "b"]
+
+
+def test_coerce_string_list_strips_tags_from_untagged_string():
+    """A plain sentence with no <item> wrapping at all still carries real
+    content -- kept as a single-item list, not discarded."""
+    assert _coerce_string_list("Insufficient public evidence to assess X.") == [
+        "Insufficient public evidence to assess X."
+    ]
+
+
+def test_output_schema_defaults_missing_problems_to_empty_list():
+    """Real second failure shape from the same Denver validation ("La Calle
+    Grill"): the model's tool-call input dropped the `problems` key
+    entirely, alongside a malformed `findings` string -- Pydantic's
+    "Field required" error would otherwise discard a real analysis over one
+    omitted field. Empty list is the honest default (asserts nothing),
+    never a fabricated problem."""
+    kwargs = _valid_output_kwargs()
+    del kwargs["problems"]
+    output = BusinessAnalysisAIOutput(**kwargs)
+    assert output.problems == []
+
+
+def test_output_schema_truncates_item_tagged_string_over_the_length_cap():
+    """Real second failure shape, other half: the same malformed response's
+    recovered `findings` held 12 real <item> entries -- over max_length=8.
+    Truncating keeps the real, first-produced content instead of rejecting
+    the whole analysis over a length the model exceeded."""
+    malformed = "".join(f"<item>Finding number {i}.</item>" for i in range(12))
+    output = BusinessAnalysisAIOutput(**_valid_output_kwargs(findings=malformed))
+    assert len(output.findings) == 8
+    assert output.findings[0] == "Finding number 0."
+
+
+def test_coerce_string_list_truncates_a_real_overlong_list():
+    long_list = [f"item {i}" for i in range(12)]
+    assert _coerce_string_list(long_list) == long_list[:8]
 
 
 def test_build_ai_request_includes_campaign_services_when_provided():

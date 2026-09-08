@@ -1,3 +1,5 @@
+import re
+
 from pydantic import BaseModel, Field, field_validator
 
 from app.modules.ai_gateway.base import AIRequest
@@ -36,6 +38,46 @@ _BANNED_BUYING_PHRASES = (
 )
 
 
+_ITEM_TAG_RE = re.compile(r"<item>(.*?)</item>", re.DOTALL | re.IGNORECASE)
+_ANY_TAG_RE = re.compile(r"</?[a-zA-Z_][^>]*>")
+
+
+_MAX_LIST_ITEMS = 8
+
+
+def _coerce_string_list(value: object) -> object:
+    """Real failure mode caught running against the live API (Fase 13/14
+    validation, not anticipated in the original design): even under forced
+    tool-use, Claude occasionally emits an array field as a single string
+    containing pseudo-XML markup instead of a real JSON array — observed
+    both as `<item>...</item>`-wrapped entries and, once, a stray
+    `</invoke>` tag leaking from the tool-call format itself. Pydantic
+    would otherwise reject this outright (a `str` where a `list[str]` is
+    required) and the whole analysis is lost. This recovers the real
+    content the model actually produced rather than discarding it —
+    extracting `<item>` contents when present, or falling back to the
+    tag-stripped text as a single entry — never inventing text that wasn't
+    there. Only string input is touched; a genuine list (the normal case)
+    passes through unchanged for Pydantic's own type check to validate.
+
+    Truncated to `_MAX_LIST_ITEMS`: a real second failure (same root cause)
+    was a malformed `findings` string that, once recovered, held 12 real
+    items — over the schema's own `max_length=8` cap. Truncating keeps the
+    real, first-produced content rather than rejecting the whole analysis
+    over a length the model exceeded, the same trade-off already made for
+    the tag recovery itself."""
+    if not isinstance(value, str):
+        return value[:_MAX_LIST_ITEMS] if isinstance(value, list) else value
+
+    items = [item.strip() for item in _ITEM_TAG_RE.findall(value)]
+    items = [item for item in items if item]
+    if items:
+        return items[:_MAX_LIST_ITEMS]
+
+    cleaned = _ANY_TAG_RE.sub("", value).strip()
+    return [cleaned] if cleaned else []
+
+
 class BusinessAnalysisAIOutput(BaseModel):
     """Validated by schema before ever being trusted (spec section 37).
     Bounded list lengths and score ranges are enforced here, not just hoped
@@ -66,8 +108,20 @@ class BusinessAnalysisAIOutput(BaseModel):
         le=100,
         description="How confident the model is in these scores, given the evidence it was shown — separate from the scores themselves (spec section 42).",
     )
-    findings: list[str] = Field(max_length=8)
-    problems: list[str] = Field(max_length=8)
+    # default_factory=list, not a required field: a real second failure
+    # (same root cause as _coerce_string_list's docstring) was a malformed
+    # response that dropped the `problems` key from the tool-call input
+    # entirely rather than sending even a malformed value for it. Rejecting
+    # a whole real analysis over one field the model omitted is a worse
+    # outcome than treating it the same as "no problems reported" — never a
+    # fabricated claim, since an empty list asserts nothing.
+    findings: list[str] = Field(default_factory=list, max_length=8)
+    problems: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("findings", "problems", mode="before")
+    @classmethod
+    def _coerce_malformed_list_output(cls, value: object) -> object:
+        return _coerce_string_list(value)
 
     @field_validator("buying_potential_summary")
     @classmethod
