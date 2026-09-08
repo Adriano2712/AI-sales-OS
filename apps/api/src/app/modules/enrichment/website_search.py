@@ -70,6 +70,31 @@ _EXCLUDED_DOMAINS = frozenset(
         "goto-where.com",
         "weeblyte.com",
         "local.yahoo.com",
+        # Confirmed the hard way (Fase 13, real Denver validation): a
+        # downtown-area business directory ("250+ stores... restaurants,
+        # bars, hotels, and services" per its own homepage), not the
+        # business's own site — matched "Cactus Club" via a URL path
+        # (`/Business/Cactus-Club/1621-Blake-Street-...`) that embeds the
+        # address, the same per-business-page-on-one-shared-domain shape as
+        # every other entry in this list. The site itself links to sibling
+        # directories for other cities under similar names — expect more
+        # of this same family to surface in future validations.
+        "denverdowntown.com",
+        # Same real Denver "Cactus Club" search — inspecting the raw
+        # unfiltered top 10 (once every existing exclusion was applied and
+        # still nothing plausible was found) surfaced these five more, none
+        # a business's own site: a stock-photo library, a sibling of
+        # denverdowntown.com for a different named district (same operator,
+        # same `/Business/<name>/<address>` URL shape), a nonprofit/
+        # organization data aggregator, a public library historical
+        # archive, an architecture-history database, and a private-clubs
+        # directory.
+        "gettyimages.com",
+        "the16thstreetmall.com",
+        "causeiq.com",
+        "archives.denverlibrary.org",
+        "sah-archipedia.org",
+        "cmac.ws",
     }
 )
 
