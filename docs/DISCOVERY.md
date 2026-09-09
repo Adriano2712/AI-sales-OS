@@ -362,3 +362,53 @@ exactly the class of bug that fix was for).
 countries yet — no one has run a real search to confirm those terms work
 outside BR/US, and per this file's own established rule, an untested
 translation is never trusted here just because it looks obviously right.
+
+## Fase 18: 8-country rotation — per-country website validation (Step 6)
+
+Before trusting the daily rotation unattended, each of the 8 countries was
+validated manually: run real discovery (Overpass first, Apify as fallback
+where Overpass has no boundary coverage — happened for GB/London) against
+the rotation's seed city, then run `search_company_website` on every
+company the discovery step left without a website, checking each result by
+hand rather than assuming the existing exclusion list would already cover
+a country it had never been tested against.
+
+This surfaced two *classes* of real bug, not just missing domains:
+
+1. **Social-media URLs reported directly as `website` in raw provider
+   data** (not just as a search-fallback false positive) — see
+   `companies/domain_filters.py` and its `is_excluded_website` integration
+   into both `overpass.py` and `apify.py` (Kasa Mia/PT: OSM tagged
+   `website=facebook.com/KasaMialx` directly).
+2. **Multinational directory chains running a different domain per
+   country** — a single-TLD exclusion entry (e.g. `tripadvisor.com`) can't
+   catch the same network's other markets (`tripadvisor.co.uk`,
+   `restaurantguru.it`). Solved with a small, explicit
+   `_MULTINATIONAL_DIRECTORY_LABELS` set matched by registrable label
+   alone, grown only after a second real sighting of the same chain under
+   a different TLD — never speculatively pre-populated with every TLD a
+   chain "probably" uses.
+
+Every country needed at least one new exclusion; several needed multiple
+rounds against the *same* company before a real owned site (or a
+confirmed "no site exists" `None`) came out clean — expected, and
+consistent with the reactive, evidence-only growth policy already used
+for `restaurants-us.com`/`goto-where.com` (Fase 13) and
+`denverdowntown.com` and friends (Fase 13/Denver). Larger, more
+food-media-saturated cities (Paris, Roma) needed noticeably more rounds
+per company than smaller ones (Lisboa, Berlin) — a real cost of picking
+capital cities as seeds, not a bug.
+
+| Country | Seed city | Companies checked | New exclusions found |
+|---|---|---|---|
+| PT | Lisboa | 3 | 8 (`novacircle.com`, `thefork.com`, `restaurantguru.com`, `trustthecrowd.com`, `viamichelin.com`, `lifecooler.com`, `cityseeker.com`, `menuweb.menu`) |
+| FR | Paris | 6 | 11 (`parisbymouth.com`, `gralon.net`, `scottjosephorlando.com`, `autoreserve.com`, `eater.com`, `cityzeum.com`, `theinfatuation.com`, `mindtrip.ai`, `sortiraparis.com`, `lesrestos.com`, `koifaire.com`) |
+| GB | London | 10 | 2 (`wheree.com`, plus generalizing `tripadvisor` to `_MULTINATIONAL_DIRECTORY_LABELS`) |
+| DE | Berlin | 10 | 4 (`restaurant-reservieren-lieferservice.de`, `wolt.com`, `kauperts.de`, `happycow.net`) |
+| IT | Roma | 10 | 9 (`timeout.com`, `likealocalguide.com`, `dolciumi.info`, `agrodolce.it`, `turismoroma.it`, `moovitapp.com`, `sluurpy.it`, `roma.com`, `paginegialle.it`, `bestogoo.com`, plus generalizing `restaurantguru` — a second sighting after PT) |
+
+BR, US, ES had already been exercised for real in earlier phases (Fase
+13's Chicago/Denver campaigns, Fase 14/17's Madrid check) and needed no
+further work here. All 8 countries are now confirmed clean against real
+data — the daily rotation (`workers/scheduler.py`'s
+`_trigger_country_rotation`) can run unattended.
