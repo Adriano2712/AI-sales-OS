@@ -95,8 +95,17 @@ jobs órfãos (referenciando tenants já deletados) que só aparecem quando um
 worker de verdade sobe e tenta processá-los — degradam graciosamente
 (log + skip), mas atrasam qualquer trabalho real enfileirado depois deles
 (foi exatamente isso que atrasou a validação real desta feature: 23 jobs
-órfãos na frente do nosso). Não corrigido nesta sessão (fora do escopo
-desta tarefa) — ver seção "Problemas" do relatório.
+órfãos na frente do nosso).
+
+**Parcialmente corrigido (planejamento da automação diária)**: o mesmo
+padrão de vazamento existia em `test_scoring_job.py`,
+`test_business_analysis_job.py` e `test_website_analysis_job.py` — cada um
+encadeia pro próximo job (`SCORING`, `MESSAGE_GENERATION`) via `get_queue()`
+real sem nenhum mock. Confirmado ao vivo: uma execução real desses testes
+deixou 4 jobs órfãos na fila real. Corrigido nesses 3 arquivos com o mesmo
+`_FakeQueue` já usado em `test_scheduler.py`. **`test_discovery_job.py`
+continua com o mesmo problema, não corrigido** — é o gap original desta
+seção, ainda em aberto, fora do escopo do que foi tocado.
 
 ## Stateless — seguro reiniciar o processo a qualquer momento
 
@@ -238,3 +247,37 @@ job `DISCOVERY`, aquele dia fica com um run "fantasma" (existe, nunca
 processa) e o scheduler não tenta de novo no mesmo dia (já viu um run com
 `started_at` de hoje). Falha rara, não instrumentada — aceitável para uma
 feature de teste/piloto, revisitar se isso virar produção real.
+
+## Fase 18: rotação de 8 países (uso pessoal, automação diária)
+
+Pedido explícito do usuário: rodar sozinho todo dia, sempre pela manhã
+(horário de Brasília), alternando entre 8 países já validados
+manualmente um a um (ver docs/DISCOVERY.md's Fase 17 para os termos de
+busca verificados). `_COUNTRY_ROTATION` (`workers/scheduler.py`) é uma
+lista fixa e ordenada de `(country, city, state)` — não uma tabela no
+banco: 8 entradas é pouco o suficiente pra "adicionar um país" ser uma
+linha de código nova, e manter em código significa que carrega a mesma
+disciplina de revisão/teste dos termos de busca dos quais depende.
+
+**Independente dos outros dois mecanismos automáticos já existentes**:
+não usa `DAILY_DISCOVERY_TENANT_ID` (a piloto antiga, agora desligada) nem
+`Campaign.auto_discovery_enabled` (Fase 9, "rodar esta campanha todo santo
+dia") — usar esse segundo mecanismo teria rodado o país do dia **duas
+vezes** (uma pela rotação, outra pela varredura de auto-discovery
+incondicional). Cada um dos 8 países ganha sua própria campanha
+(`"Rotação Diária (auto) - restaurants - {country}"`), criada uma vez e
+reaproveitada — só a rotação em si decide quando cada uma roda.
+
+**"De manhã" sem precisar de infraestrutura de agendamento nova**: um
+achado real durante o planejamento — `_ensure_todays_run` já calcula "hoje"
+no fuso horário de Brasília (`_TZ = ZoneInfo("America/Sao_Paulo")`), não em
+UTC como eu tinha assumido errado numa análise anterior com o usuário.
+Faltava só não disparar antes da hora desejada: `_ROTATION_MIN_HOUR = 8`
+bloqueia o gatilho até o primeiro tick do scheduler (a cada 15 min) que
+cair às 8h ou depois, horário de Brasília — não é um `08:00:00` cravado,
+mas "pronto quando eu checar o email de manhã" não precisa ser.
+
+**Real, verificado por teste de integração real** (`test_scheduler.py`):
+`_trigger_country_rotation` cria a campanha certa pro país do dia, um run,
+e enfileira o job de descoberta — e corretamente não faz nada quando
+chamado antes de `_ROTATION_MIN_HOUR`.

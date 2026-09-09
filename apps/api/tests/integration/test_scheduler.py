@@ -36,6 +36,89 @@ def test_today_segment_returns_a_valid_rotation_member():
     assert scheduler._today_segment() in scheduler._SEGMENTS_ROTATION
 
 
+def test_todays_rotation_entry_returns_a_valid_rotation_member():
+    import scheduler
+
+    assert scheduler._todays_rotation_entry() in scheduler._COUNTRY_ROTATION
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_trigger_country_rotation_creates_run_for_todays_country(
+    app_session_factory, monkeypatch, two_tenants
+):
+    """Fase 18: whichever country _todays_rotation_entry() picks gets a
+    real campaign (created on first use, reused after), a fresh run, and a
+    queued DISCOVERY job -- same shape as Fase 9's per-campaign opt-in, just
+    driven by the fixed 8-country list instead of a user-configured flag."""
+    import scheduler
+
+    fake_queue = _FakeQueue()
+    monkeypatch.setattr(scheduler, "get_queue", lambda: fake_queue)
+    # Deterministic regardless of what time this test actually runs at --
+    # the hour gate itself is covered separately below.
+    monkeypatch.setattr(scheduler, "_ROTATION_MIN_HOUR", 0)
+
+    tenant_a, _ = two_tenants
+    country, city, _state = scheduler._todays_rotation_entry()
+
+    async with app_session_factory() as session:
+        await scheduler._trigger_country_rotation(session, tenant_a.id)
+
+        await set_tenant_context(session, tenant_a.id)
+        result = await session.execute(
+            select(Campaign).where(
+                Campaign.tenant_id == tenant_a.id,
+                Campaign.name == f"Rotação Diária (auto) - restaurants - {country}",
+            )
+        )
+        campaign = result.scalar_one()
+        assert campaign.cities == [city]
+        assert campaign.country == country
+        assert campaign.auto_discovery_enabled is False
+
+        run_result = await session.execute(
+            select(CampaignRun).where(CampaignRun.campaign_id == campaign.id)
+        )
+        runs = run_result.scalars().all()
+        assert len(runs) == 1
+        assert runs[0].status == CampaignRunStatus.PENDING
+
+    assert len(fake_queue.calls) == 1
+    assert fake_queue.calls[0][0] == "app.modules.jobs.handlers.discovery.run"
+
+
+@requires_live_db
+@pytest.mark.asyncio
+async def test_trigger_country_rotation_does_nothing_before_the_minimum_hour(
+    app_session_factory, monkeypatch, two_tenants
+):
+    """The user explicitly asked for this to not fire in the middle of the
+    Brazilian night -- before _ROTATION_MIN_HOUR, no campaign/run/job gets
+    created at all, regardless of whether today's rotation slot is due."""
+    import scheduler
+
+    fake_queue = _FakeQueue()
+    monkeypatch.setattr(scheduler, "get_queue", lambda: fake_queue)
+    monkeypatch.setattr(scheduler, "_ROTATION_MIN_HOUR", 25)  # never reachable
+
+    tenant_a, _ = two_tenants
+
+    async with app_session_factory() as session:
+        await scheduler._trigger_country_rotation(session, tenant_a.id)
+
+        await set_tenant_context(session, tenant_a.id)
+        result = await session.execute(
+            select(Campaign).where(
+                Campaign.tenant_id == tenant_a.id,
+                Campaign.name.like(f"{scheduler._ROTATION_CAMPAIGN_PREFIX}%"),
+            )
+        )
+        assert result.first() is None
+
+    assert fake_queue.calls == []
+
+
 @requires_live_db
 @pytest.mark.asyncio
 async def test_get_or_create_daily_campaign_is_idempotent(app_session_factory):

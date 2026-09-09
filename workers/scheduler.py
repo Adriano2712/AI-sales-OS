@@ -512,6 +512,133 @@ async def _trigger_autonomous_campaign_runs_all_tenants() -> None:
                 )
 
 
+_ROTATION_CAMPAIGN_PREFIX = "Rotação Diária (auto)"
+# Fase 18 (daily-automation planning): one real, Apify-term-verified city
+# per country (see docs/DISCOVERY.md's Fase 17 table) — restaurants only
+# for now, per the user's own explicit "prove restaurants across all 8
+# before touching clinics/b2b_services" call. A fixed, ordered list, not a
+# database table: 8 entries is small enough that "add a country" is a
+# one-line code change, and keeping it in code means it ships with the
+# same review/test discipline as the search terms it depends on.
+_COUNTRY_ROTATION: list[tuple[str, str, str]] = [
+    ("BR", "Sorocaba", "SP"),
+    ("US", "Chicago", "IL"),
+    ("ES", "Madrid", "Madrid"),
+    ("PT", "Lisboa", "Lisboa"),
+    ("FR", "Paris", "Ile-de-France"),
+    ("GB", "London", "England"),
+    ("DE", "Berlin", "Berlin"),
+    ("IT", "Roma", "Lazio"),
+]
+_ROTATION_TARGET_QUANTITY = 5
+# The user explicitly wants this to not fire in the middle of the Brazilian
+# night — _ensure_todays_run's own date boundary is already Brazil-local
+# (_TZ), but a bare date boundary alone would trigger on the very first
+# tick after midnight, not "in the morning." Gating on the hour as well
+# means the actual trigger time is "whichever 15-minute tick lands at or
+# after 08:00 America/Sao_Paulo," not a precise 08:00:00 — close enough for
+# "ready when I check email in the morning," and no new scheduling
+# infrastructure needed for it.
+_ROTATION_MIN_HOUR = 8
+
+
+def _todays_rotation_entry() -> tuple[str, str, str]:
+    return _COUNTRY_ROTATION[datetime.now(_TZ).toordinal() % len(_COUNTRY_ROTATION)]
+
+
+async def _get_or_create_rotation_campaign(
+    db, tenant_id: uuid.UUID, country: str, city: str, state: str
+) -> Campaign:
+    name = f"{_ROTATION_CAMPAIGN_PREFIX} - restaurants - {country}"
+    result = await db.execute(
+        select(Campaign).where(Campaign.tenant_id == tenant_id, Campaign.name == name)
+    )
+    campaign = result.scalar_one_or_none()
+    if campaign is not None:
+        if campaign.status != CampaignStatus.ACTIVE:
+            campaign = await update_campaign(db, campaign, CampaignUpdate(status=CampaignStatus.ACTIVE))
+        return campaign
+
+    campaign = await create_campaign(
+        db,
+        tenant_id,
+        CampaignCreate(
+            name=name,
+            segment="restaurants",
+            cities=[city],
+            state=state,
+            country=country,
+            target_quantity=_ROTATION_TARGET_QUANTITY,
+            # Deliberately NOT auto_discovery_enabled=True: that flag is
+            # Fase 9's own "run this campaign every single day" opt-in,
+            # driven by _trigger_autonomous_campaign_runs above with no
+            # rotation/hour gating of its own. Setting it here would run
+            # *today's* rotation country twice a day — once from this
+            # function, once from that sweep picking it up unconditionally.
+            # This function is the only trigger these 8 campaigns ever get.
+        ),
+    )
+    return await update_campaign(db, campaign, CampaignUpdate(status=CampaignStatus.ACTIVE))
+
+
+async def _trigger_country_rotation(db, tenant_id: uuid.UUID) -> None:
+    """Fase 18: one country from _COUNTRY_ROTATION runs discovery each
+    calendar day (Brazil-local), not gated behind DAILY_DISCOVERY_TENANT_ID
+    or per-campaign auto_discovery_enabled — a purpose-built daily trigger
+    for the user's own explicit "8 countries, one a day" request. Reuses
+    _ensure_todays_run's per-campaign idempotency exactly as the pilot
+    _tick and the Fase 9 sweep already do."""
+    if datetime.now(_TZ).hour < _ROTATION_MIN_HOUR:
+        return
+
+    await set_tenant_context(db, tenant_id)
+    country, city, state = _todays_rotation_entry()
+    campaign = await _get_or_create_rotation_campaign(db, tenant_id, country, city, state)
+    await db.commit()
+
+    await set_tenant_context(db, tenant_id)
+    run = await _ensure_todays_run(db, tenant_id, campaign)
+    if run is None:
+        return
+    await db.commit()
+
+    await set_tenant_context(db, tenant_id)
+    job = await get_or_create_job(
+        db,
+        tenant_id=tenant_id,
+        job_type=JobType.DISCOVERY,
+        idempotency_key=str(run.id),
+        payload={"campaign_run_id": str(run.id)},
+    )
+    await db.commit()
+    get_queue().enqueue(
+        "app.modules.jobs.handlers.discovery.run", str(job.id), str(tenant_id), str(run.id)
+    )
+    logger.info(
+        "country_rotation_triggered",
+        tenant_id=str(tenant_id),
+        country=country,
+        city=city,
+        run_id=str(run.id),
+    )
+
+
+async def _trigger_country_rotation_all_tenants() -> None:
+    """Tenant-agnostic, same shape as _trigger_autonomous_campaign_runs_all_tenants."""
+    async with async_session_factory() as db:
+        result = await db.execute(select(Tenant.id))  # tenants table has no RLS
+        tenant_ids = [row[0] for row in result.all()]
+
+    for tenant_id in tenant_ids:
+        async with async_session_factory() as db:
+            try:
+                await _trigger_country_rotation(db, tenant_id)
+            except Exception as exc:  # noqa: BLE001 - one tenant's failure must not skip the rest
+                logger.error(
+                    "country_rotation_sweep_failed", tenant_id=str(tenant_id), error=str(exc)
+                )
+
+
 async def _retry_stuck_jobs_all_tenants() -> None:
     """Tenant-agnostic on purpose (unlike _tick, which only runs the daily
     discovery/digest for one configured tenant) — job-retry reliability
@@ -590,6 +717,14 @@ async def main() -> None:
             await _trigger_autonomous_campaign_runs_all_tenants()
         except Exception as exc:  # noqa: BLE001 - one bad sweep must not kill the scheduler
             logger.error("autonomous_discovery_sweep_failed", error=str(exc))
+
+        # Fase 18: one country from the 8-country rotation, once a day,
+        # from 08:00 America/Sao_Paulo onward — independent of both the
+        # pilot tick and Fase 9's per-campaign opt-in above.
+        try:
+            await _trigger_country_rotation_all_tenants()
+        except Exception as exc:  # noqa: BLE001 - one bad sweep must not kill the scheduler
+            logger.error("country_rotation_sweep_failed", error=str(exc))
 
         # Fase 10: digest emails for every tenant's completed runs, not
         # just the pilot's — closes the gap where an autonomous
