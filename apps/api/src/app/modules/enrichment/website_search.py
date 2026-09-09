@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.modules.companies.domain_filters import domain, is_excluded_domain
 from app.modules.companies.models import Company, CompanySource
 from app.modules.companies.service import normalize_name
 from app.modules.evidence.enums import EvidenceCategory, EvidenceConfidence, EvidencePolarity
@@ -14,89 +15,6 @@ from app.modules.evidence.service import get_or_create_evidence
 logger = get_logger(job_type="ENRICHMENT")
 
 _BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
-
-# A hit on one of these is real evidence the business exists online, but
-# never proof of an *owned* website — directories, social platforms, review
-# aggregators, and delivery marketplaces are never a business's own site
-# (spec section 86: don't invent what wasn't verified). Overpass/Apify's own
-# `website` field already means "the business's own domain" — this fallback
-# has to mean the same thing, or it would silently redefine what
-# `Company.website` means for every downstream consumer (website_analysis
-# scores *this* page as if it were the business's own site).
-_EXCLUDED_DOMAINS = frozenset(
-    {
-        "facebook.com",
-        "instagram.com",
-        "twitter.com",
-        "x.com",
-        "linkedin.com",
-        "yelp.com",
-        "tripadvisor.com",
-        "foursquare.com",
-        "opentable.com",
-        "doordash.com",
-        "ubereats.com",
-        "grubhub.com",
-        "postmates.com",
-        "mapquest.com",
-        "maps.google.com",
-        "google.com",
-        "bing.com",
-        "yellowpages.com",
-        "bbb.org",
-        "indeed.com",
-        "glassdoor.com",
-        "zomato.com",
-        "menupix.com",
-        "allmenus.com",
-        "waze.com",
-        "apple.com",
-        "yalp.com",
-        "nextdoor.com",
-        "wikipedia.org",
-        # Confirmed the hard way (Fase 13, real Chicago validation): both
-        # are subdomain-per-business directory/listing networks, not any
-        # individual business's own domain. "La Cocina de Irma" (a real
-        # independent restaurant with no website field anywhere in
-        # Overpass/Apify) resolved to `lacocinadeirma.restaurants-us.com`
-        # on the first real Brave Search call, then to
-        # `la-cocina-de-irma.goto-where.com` after excluding the first —
-        # strong evidence this specific business may genuinely have no
-        # website of its own, not that the search is failing. This list is
-        # grown reactively from real findings like these, not preemptively
-        # guessed — expect it to need more entries as more of these
-        # networks get hit for real.
-        "restaurants-us.com",
-        "goto-where.com",
-        "weeblyte.com",
-        "local.yahoo.com",
-        # Confirmed the hard way (Fase 13, real Denver validation): a
-        # downtown-area business directory ("250+ stores... restaurants,
-        # bars, hotels, and services" per its own homepage), not the
-        # business's own site — matched "Cactus Club" via a URL path
-        # (`/Business/Cactus-Club/1621-Blake-Street-...`) that embeds the
-        # address, the same per-business-page-on-one-shared-domain shape as
-        # every other entry in this list. The site itself links to sibling
-        # directories for other cities under similar names — expect more
-        # of this same family to surface in future validations.
-        "denverdowntown.com",
-        # Same real Denver "Cactus Club" search — inspecting the raw
-        # unfiltered top 10 (once every existing exclusion was applied and
-        # still nothing plausible was found) surfaced these five more, none
-        # a business's own site: a stock-photo library, a sibling of
-        # denverdowntown.com for a different named district (same operator,
-        # same `/Business/<name>/<address>` URL shape), a nonprofit/
-        # organization data aggregator, a public library historical
-        # archive, an architecture-history database, and a private-clubs
-        # directory.
-        "gettyimages.com",
-        "the16thstreetmall.com",
-        "causeiq.com",
-        "archives.denverlibrary.org",
-        "sah-archipedia.org",
-        "cmac.ws",
-    }
-)
 
 # Bounded to a handful of top results — this is a fallback lookup, not a
 # general web crawl. Each result costs the same one API call regardless of
@@ -110,25 +28,6 @@ class WebsiteSearchError(Exception):
     "couldn't determine a website this way" (log and move on), the same
     degrade-gracefully posture as every other optional provider in this
     codebase (ApifyProvider et al), never a reason to fail discovery."""
-
-
-def _domain(url: str) -> str:
-    from urllib.parse import urlparse
-
-    host = urlparse(url).netloc.lower()
-    return host[4:] if host.startswith("www.") else host
-
-
-def _is_excluded_domain(host: str) -> bool:
-    """Matches the bare domain (facebook.com) and any subdomain of it
-    (m.facebook.com, business.facebook.com) — a real bug caught during this
-    phase's own validation: "La Cocina de Irma" resolved to
-    `lacocinadeirma.restaurants-us.com` (a per-business subdomain of an
-    excluded aggregator), which a bare `host in _EXCLUDED_DOMAINS`
-    membership check would have silently missed (no two businesses share
-    the same subdomain, so exact-match against the full host can never
-    catch this class of directory network)."""
-    return any(host == excluded or host.endswith(f".{excluded}") for excluded in _EXCLUDED_DOMAINS)
 
 
 def _is_plausible_own_site(company_name: str, title: str, snippet: str) -> bool:
@@ -184,7 +83,7 @@ async def search_company_website(
         url = item.get("url")
         if not url:
             continue
-        if _is_excluded_domain(_domain(url)):
+        if is_excluded_domain(domain(url)):
             continue
         title = item.get("title", "")
         snippet = item.get("description", "")

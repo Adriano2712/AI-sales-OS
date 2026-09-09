@@ -1,5 +1,6 @@
 import httpx
 
+from app.modules.companies.domain_filters import is_excluded_website
 from app.modules.companies.service import NormalizedRawCompany
 from app.modules.discovery.base import NATIONWIDE_CITY_SENTINEL, DiscoveryProvider, DiscoveryProviderError
 from app.modules.discovery.segment_mapping import SEGMENT_TO_APIFY_SEARCH_TERM, get_apify_search_term
@@ -114,6 +115,12 @@ class ApifyProvider(DiscoveryProvider):
         # legitimately return a neighboring city's business.
         real_city = item.get("city") or city
         real_state = item.get("state") or state
+        # Same real gap Overpass had (Fase 18, Portugal validation): a
+        # Facebook/Instagram/etc. URL reported as `website` isn't the
+        # business's own analyzable site — filtered at the shared
+        # domain_filters list, not a separate guess.
+        raw_website = item.get("website")
+        website = None if is_excluded_website(raw_website) else raw_website
         return NormalizedRawCompany(
             provider="apify",
             external_id=item.get("placeId"),
@@ -124,7 +131,7 @@ class ApifyProvider(DiscoveryProvider):
             country=country,
             address=item.get("street") or item.get("address"),
             phone=item.get("phoneUnformatted") or item.get("phone"),
-            website=item.get("website"),
+            website=website,
             permanently_closed=bool(item.get("permanentlyClosed")),
             google_place_id=item.get("placeId"),
             google_rating=item.get("totalScore"),

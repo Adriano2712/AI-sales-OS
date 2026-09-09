@@ -51,6 +51,21 @@ def test_to_raw_company_leaves_email_none_when_absent():
     assert result.email is None
 
 
+def test_to_raw_company_filters_out_a_social_media_website():
+    """Real gap found running the 8-country rotation's Portugal validation
+    (Fase 18): "Kasa Mia" had `website=facebook.com/KasaMialx` tagged
+    directly in OSM -- a business listing its own Facebook page as its
+    "website" tag is common, but that's not the business's own analyzable
+    site (website_analysis would score Facebook's page, not theirs)."""
+    element = {
+        "type": "node",
+        "id": 999,
+        "tags": {"name": "Kasa Mia", "website": "https://www.facebook.com/KasaMialx"},
+    }
+    result = OverpassProvider._to_raw_company(element, "restaurants", "Lisboa", "Lisboa", "PT")
+    assert result.website is None
+
+
 def test_to_raw_company_finds_website_under_url_tag():
     element = {
         "type": "node",

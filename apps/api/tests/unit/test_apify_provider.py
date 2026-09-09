@@ -12,6 +12,11 @@ _REAL_ITEM_SAMPLE = {
     "city": "Sorocaba",
     "state": "SP",
     "countryCode": "BR",
+    # Real captured sample: Apify itself reported this business's Facebook
+    # page as its "website" — kept exactly as originally captured (Fase 4)
+    # even though the parser now filters it (Fase 18, see
+    # test_to_raw_company_filters_out_a_social_media_website below) rather
+    # than editing history out of a real fixture.
     "website": "https://www.facebook.com/RestauranteDaFazendaSorocaba/",
     "phone": "+55 15 3217-4006",
     "phoneUnformatted": "+551532174006",
@@ -30,12 +35,29 @@ def test_to_raw_company_maps_real_fields():
     assert result.name == "Restaurante da Fazenda"
     assert result.address == "Estrada Heitor Cury, 171, SP-270, 105"
     assert result.phone == "+551532174006"  # prefers phoneUnformatted
-    assert result.website == "https://www.facebook.com/RestauranteDaFazendaSorocaba/"
     assert result.permanently_closed is False
     assert result.google_place_id == "ChIJpZ76ALCLxZQRd_wgpgmUd3o"
     assert result.google_rating == 4.7
     assert result.google_review_count == 312
     assert result.raw_data == {"apify_place": _REAL_ITEM_SAMPLE}
+
+
+def test_to_raw_company_filters_out_a_social_media_website():
+    """Real gap found running the 8-country rotation's Portugal validation
+    (Fase 18): a Facebook/Instagram/etc. URL reported directly as `website`
+    (Overpass and Apify both do this in real data) isn't the business's own
+    analyzable site -- website_analysis would otherwise crawl and score
+    Facebook's own page as if it were the business's. This project's own
+    real captured sample (`_REAL_ITEM_SAMPLE`, Fase 4) happens to be exactly
+    this case."""
+    result = ApifyProvider._to_raw_company(_REAL_ITEM_SAMPLE, "restaurants", "Sorocaba", "SP", "BR")
+    assert result.website is None
+
+
+def test_to_raw_company_keeps_a_real_owned_website():
+    item = {**_REAL_ITEM_SAMPLE, "website": "https://www.restaurantedafazenda.com.br/"}
+    result = ApifyProvider._to_raw_company(item, "restaurants", "Sorocaba", "SP", "BR")
+    assert result.website == "https://www.restaurantedafazenda.com.br/"
 
 
 def test_to_raw_company_leaves_google_reviews_none_when_absent():

@@ -1,5 +1,6 @@
 import httpx
 
+from app.modules.companies.domain_filters import is_excluded_website
 from app.modules.companies.service import NormalizedRawCompany
 from app.modules.discovery.base import NATIONWIDE_CITY_SENTINEL, DiscoveryProvider, DiscoveryProviderError
 from app.modules.discovery.segment_mapping import SEGMENT_TO_OSM_TAGS
@@ -127,6 +128,17 @@ class OverpassProvider(DiscoveryProvider):
         osm_type = element.get("type", "node")
         osm_id = element.get("id")
 
+        # Real gap found running the 8-country rotation's Portugal
+        # validation (Fase 18): "Kasa Mia" had `website=facebook.com/
+        # KasaMialx` tagged directly in OSM — a business listing its own
+        # Facebook page as its "website" tag is common, but that's not the
+        # analyzable, owned site `Company.website` means for every
+        # downstream consumer (website_analysis would score Facebook's own
+        # page, not the business's). Filtered at the same domain_filters
+        # list the search fallback already uses, not a separate guess.
+        raw_website = _first_present(tags, "website", "contact:website", "url")
+        website = None if is_excluded_website(raw_website) else raw_website
+
         return NormalizedRawCompany(
             provider="overpass",
             external_id=f"{osm_type}/{osm_id}",
@@ -137,7 +149,7 @@ class OverpassProvider(DiscoveryProvider):
             country=country,
             address=address,
             phone=_first_present(tags, "phone", "contact:phone", "mobile", "contact:mobile"),
-            website=_first_present(tags, "website", "contact:website", "url"),
+            website=website,
             instagram=_first_present(tags, "contact:instagram", "instagram"),
             email=_first_present(tags, "contact:email", "email"),
             raw_data={"osm_tags": tags, "osm_type": osm_type, "osm_id": osm_id},
