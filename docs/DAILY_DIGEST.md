@@ -107,6 +107,22 @@ deixou 4 jobs órfãos na fila real. Corrigido nesses 3 arquivos com o mesmo
 continua com o mesmo problema, não corrigido** — é o gap original desta
 seção, ainda em aberto, fora do escopo do que foi tocado.
 
+**Escalou para além da fila (Fase 18)**: essa mesma causa raiz — um
+processo de teste morto antes do `finally` de limpeza rodar — não vaza só
+jobs Redis órfãos, vaza a própria linha `Tenant` real no banco. Quando o
+Fase 18 country-rotation sweep passou a rodar "para todo tenant" pela
+primeira vez de verdade, ele pegou um `Tenant` órfão de
+`test_discovery_job.py` ("Discovery Merge Tenant...") e começou a gastar
+créditos reais de Apify/IA numa campanha para um tenant que nenhum humano
+consegue acessar (0 memberships). Mitigado em `workers/scheduler.py`
+(`_real_tenant_ids`, ver commit) exigindo pelo menos um `Membership` real
+antes de qualquer sweep tocar um tenant — reduz o dano de "gasta dinheiro
+de verdade" para "linha órfã inofensiva no banco", mas não resolve a causa
+raiz: `test_discovery_job.py` continua podendo deixar tenants (e, sem o
+`_FakeQueue`, jobs) órfãos se interrompido. Consertar isso de vez exigiria
+uma base de dados de teste genuinamente separada da de produção (ver
+docs/DATABASE.md) — fora do escopo resolvido aqui.
+
 ## Stateless — seguro reiniciar o processo a qualquer momento
 
 Nada de estado em memória entre ticks: "já rodou hoje?" e "digest já
