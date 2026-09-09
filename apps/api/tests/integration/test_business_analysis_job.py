@@ -18,6 +18,22 @@ from app.modules.jobs.models import Job
 from .conftest import ADMIN_DATABASE_URL, requires_live_db
 
 
+class _FakeQueue:
+    """Same pattern as test_scheduler.py's own _FakeQueue --
+    business_analysis.py chains into SCORING unconditionally at the end of
+    a successful run; without this every test here enqueues a real job
+    against the real shared Redis, referencing a throwaway test tenant
+    that's about to be deleted (confirmed leaking real stale jobs into the
+    queue while validating a separate change — see test_scoring_job.py's
+    own _FakeQueue for the sibling half of this same class of leak)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def enqueue(self, *args) -> None:
+        self.calls.append(args)
+
+
 class _FakeAIProvider(AIProvider):
     """Stands in for AnthropicProvider — automated tests must never spend
     real money (spec section 39). Real-world interop is verified separately,
@@ -103,6 +119,7 @@ async def test_business_analysis_job_creates_analysis_and_evidence(
         fake_router = lambda task: _FakeAIProvider()  # noqa: E731
         monkeypatch.setattr(handler, "get_provider_for_task", fake_router)
         monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
+        monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
 
         await handler._run(str(job_id), str(tenant_id), str(company_id))
 
@@ -259,6 +276,7 @@ async def test_service_fit_score_is_scored_against_the_campaigns_own_services(
         fake_router = lambda task: _CapturingFakeProvider()  # noqa: E731
         monkeypatch.setattr(handler, "get_provider_for_task", fake_router)
         monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
+        monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
 
         await handler._run(str(job_id), str(tenant_id), str(company_id))
 
@@ -361,6 +379,7 @@ async def test_rerunning_business_analysis_does_not_call_ai_again(
         fake_router = lambda task: _CountingFakeProvider()  # noqa: E731
         monkeypatch.setattr(handler, "get_provider_for_task", fake_router)
         monkeypatch.setattr(ai_gateway_service, "get_provider_for_task", fake_router)
+        monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
 
         await handler._run(str(job1_id), str(tenant_id), str(company_id))
         assert call_count == 1

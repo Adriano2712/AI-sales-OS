@@ -21,6 +21,22 @@ from app.modules.website_analysis.models import Website, WebsiteAnalysis, Websit
 from .conftest import ADMIN_DATABASE_URL, requires_live_db
 
 
+class _FakeQueue:
+    """Same pattern as test_scheduler.py's own _FakeQueue --
+    website_analysis.py chains into BUSINESS_ANALYSIS unconditionally after
+    any successful analysis (even a down/blocked/JS-shell site still
+    produces one); without this every test here enqueues a real job
+    against the real shared Redis, referencing a throwaway test tenant
+    that's about to be deleted (same class of leak found and fixed in
+    test_business_analysis_job.py and test_scoring_job.py)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def enqueue(self, *args) -> None:
+        self.calls.append(args)
+
+
 class _FakeAIProvider(AIProvider):
     """Stands in for AnthropicProvider — automated tests must never spend
     real money (spec section 39), same discipline as
@@ -124,6 +140,8 @@ async def test_website_analysis_job_creates_score_and_pages(app_session_factory,
         )
 
         import app.modules.jobs.handlers.website_analysis as handler
+
+        monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
 
         import app.modules.ai_gateway.service as ai_gateway_service
 
@@ -240,6 +258,8 @@ async def test_rerunning_analysis_replaces_pages_not_accumulates(
 
         import app.modules.jobs.handlers.website_analysis as handler
 
+        monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
+
         import app.modules.ai_gateway.service as ai_gateway_service
 
         fake_router = lambda task: _FakeAIProvider()  # noqa: E731
@@ -352,6 +372,8 @@ async def test_down_site_gets_deterministic_problem_and_skips_ai_call(
         )
 
         import app.modules.jobs.handlers.website_analysis as handler
+
+        monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
 
         import app.modules.ai_gateway.service as ai_gateway_service
 
@@ -481,6 +503,8 @@ async def test_anti_bot_blocked_site_is_never_scored_as_poor_quality(
 
         import app.modules.jobs.handlers.website_analysis as handler
 
+        monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
+
         import app.modules.ai_gateway.service as ai_gateway_service
 
         fake_router = lambda task: _CountingFakeProvider()  # noqa: E731
@@ -605,6 +629,8 @@ async def test_js_only_shell_never_leaks_a_real_quality_score(app_session_factor
 
         import app.modules.jobs.handlers.website_analysis as handler
 
+        monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
+
         import app.modules.ai_gateway.service as ai_gateway_service
 
         fake_router = lambda task: _CountingFakeProvider()  # noqa: E731
@@ -690,6 +716,8 @@ async def test_no_api_key_still_produces_deterministic_problems(app_session_fact
         )
 
         import app.modules.jobs.handlers.website_analysis as handler
+
+        monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
         from app.core.config import get_settings
 
         # No AnthropicProvider/get_provider_for_task mock here on purpose —
@@ -778,6 +806,8 @@ async def test_crawl_never_overwrites_an_already_known_email(app_session_factory
         )
 
         import app.modules.jobs.handlers.website_analysis as handler
+
+        monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
 
         import app.modules.ai_gateway.service as ai_gateway_service
 

@@ -18,10 +18,30 @@ from app.modules.opportunities.models import Opportunity
 from .conftest import ADMIN_DATABASE_URL, requires_live_db
 
 
+class _FakeQueue:
+    """Same pattern as test_scheduler.py's own _FakeQueue -- scoring.py now
+    chains into MESSAGE_GENERATION for HIGH/GOOD opportunities (see
+    jobs/handlers/scoring.py's _maybe_trigger_message_generation), and
+    without this every test reaching that classification would enqueue a
+    real job against the real shared Redis, referencing a throwaway test
+    tenant that's about to be deleted -- confirmed the hard way: a real run
+    of this exact test file left 2 stale message_generation jobs (plus 2
+    stale scoring jobs from business_analysis's own pre-existing,
+    similarly-unmocked chaining) sitting in the real queue."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def enqueue(self, *args) -> None:
+        self.calls.append(args)
+
+
 @requires_live_db
 @pytest.mark.asyncio
-async def test_scoring_job_creates_opportunity_from_business_analysis(app_session_factory):
+async def test_scoring_job_creates_opportunity_from_business_analysis(app_session_factory, monkeypatch):
     import app.modules.jobs.handlers.scoring as handler
+
+    monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
 
     tenant_id = uuid.uuid4()
     admin_engine = create_async_engine(ADMIN_DATABASE_URL)
@@ -136,10 +156,12 @@ async def test_scoring_job_creates_opportunity_from_business_analysis(app_sessio
 
 @requires_live_db
 @pytest.mark.asyncio
-async def test_rerunning_scoring_updates_the_same_opportunity_row(app_session_factory):
+async def test_rerunning_scoring_updates_the_same_opportunity_row(app_session_factory, monkeypatch):
     """Idempotency (spec section 54): rerunning SCORING for the same company
     must update the existing Opportunity, not create a second one."""
     import app.modules.jobs.handlers.scoring as handler
+
+    monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
 
     tenant_id = uuid.uuid4()
     admin_engine = create_async_engine(ADMIN_DATABASE_URL)
@@ -229,11 +251,13 @@ async def test_rerunning_scoring_updates_the_same_opportunity_row(app_session_fa
 
 @requires_live_db
 @pytest.mark.asyncio
-async def test_invalid_and_do_not_contact_company_gets_penalized_to_zero(app_session_factory):
+async def test_invalid_and_do_not_contact_company_gets_penalized_to_zero(app_session_factory, monkeypatch):
     """Fase 7 penalties, end to end: an apparently-closed (INVALID) business
     marked do-not-contact must never surface as a fresh, workable
     opportunity — spec's own negative examples, applied for real."""
     import app.modules.jobs.handlers.scoring as handler
+
+    monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
 
     tenant_id = uuid.uuid4()
     admin_engine = create_async_engine(ADMIN_DATABASE_URL)
@@ -316,13 +340,15 @@ async def test_invalid_and_do_not_contact_company_gets_penalized_to_zero(app_ses
 
 @requires_live_db
 @pytest.mark.asyncio
-async def test_campaign_weight_override_changes_the_opportunity_score(app_session_factory):
+async def test_campaign_weight_override_changes_the_opportunity_score(app_session_factory, monkeypatch):
     """Fase 7's "weights configurable per campaign" requirement, end to end:
     a campaign that only cares about business_fit must score purely on
     that dimension for a company discovered through it."""
     import app.modules.jobs.handlers.scoring as handler
     from app.modules.campaigns.enums import CampaignStatus
     from app.modules.campaigns.models import Campaign, CampaignRun
+
+    monkeypatch.setattr(handler, "get_queue", lambda: _FakeQueue())
 
     tenant_id = uuid.uuid4()
     admin_engine = create_async_engine(ADMIN_DATABASE_URL)
