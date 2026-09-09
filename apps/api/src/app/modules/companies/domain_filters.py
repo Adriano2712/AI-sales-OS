@@ -169,6 +169,23 @@ EXCLUDED_DOMAINS = frozenset(
         # after excluding tripadvisor.co.uk, same shape as every other
         # directory entry here.
         "wheree.com",
+        # Confirmed the hard way (Fase 18, real Germany/Berlin validation
+        # of the 8-country rotation): a German food-delivery listings
+        # directory ("Nam Thuan" resolved to a per-restaurant
+        # "Lieferdienst" [delivery service] page), same shared-domain
+        # shape as every other directory entry here.
+        "restaurant-reservieren-lieferservice.de",
+        # Same Berlin validation ("Tibet Haus"): Wolt, a real European food
+        # delivery platform (the DoorDash/UberEats of several EU markets),
+        # not the restaurant's own site.
+        "wolt.com",
+        # Same Berlin validation ("Ach!NikO!Ach!"): Kauperts, a German
+        # city-business directory network.
+        "kauperts.de",
+        # Second round on "Tibet Haus" (after excluding wolt.com):
+        # HappyCow, a real vegan/vegetarian restaurant review directory,
+        # not the restaurant's own site.
+        "happycow.net",
     }
 )
 
