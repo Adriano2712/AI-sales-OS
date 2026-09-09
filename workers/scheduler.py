@@ -17,6 +17,7 @@ Usage:
 """
 
 import asyncio
+import os
 import sys
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -25,7 +26,8 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "api" / "src"))
 
-from sqlalchemy import or_, select  # noqa: E402
+from sqlalchemy import or_, select, text  # noqa: E402
+from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 from app.core import model_registry  # noqa: E402,F401
 from app.core.config import get_settings  # noqa: E402
@@ -60,7 +62,6 @@ from app.modules.notifications.site_digest import (  # noqa: E402
     build_site_digest_text,
 )
 from app.modules.opportunities.models import Opportunity  # noqa: E402
-from app.modules.tenancy.models import Tenant  # noqa: E402
 from app.modules.website_analysis.service import (  # noqa: E402
     get_latest_analysis as get_latest_website_analysis,
 )
@@ -366,6 +367,72 @@ async def _maybe_send_pending_digests(db, tenant_id: uuid.UUID) -> None:
             await _send_site_diagnostic_for_run(db, tenant_id, run, campaign)
 
 
+def _admin_engine_url() -> str:
+    url = os.environ.get("MIGRATIONS_DATABASE_URL")
+    if not url:
+        raise RuntimeError(
+            "MIGRATIONS_DATABASE_URL must be set for the scheduler's "
+            "_real_tenant_ids check — see docs/DEPLOYMENT.md"
+        )
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
+async def _real_tenant_ids() -> list[uuid.UUID]:
+    """Tenants table has no RLS, so every "for every tenant" sweep below
+    could just query it directly — but a tenant row alone isn't evidence a
+    real person can ever see the results: real signup always creates a
+    Membership in the same transaction (see auth/service.py), while the
+    integration test suite creates bare Tenant rows directly against the
+    real database and is supposed to delete them in a finally block, but a
+    hard-killed test process skips that cleanup (see
+    tests/integration/test_discovery_job.py, docs/DAILY_DIGEST.md's
+    already-documented Redis-queue version of this same root cause).
+
+    Found the hard way (Fase 18): a leftover "Discovery Merge Tenant" row
+    from an interrupted test run got picked up by the real country-
+    rotation sweep and started spending real Apify/AI credits on a tenant
+    no one could ever log in to see. Requiring at least one Membership
+    costs nothing for a real tenant (every real one has one by
+    construction) and excludes exactly this class of orphan — a
+    structural fact, not a guessed name pattern that would break the
+    moment a test used a different tenant-name prefix.
+
+    Deliberately uses the admin (MIGRATIONS_DATABASE_URL) connection, not
+    the app role's async_session_factory used everywhere else in this
+    file: `memberships`' only RLS policy is `user_id = request.user_id`
+    (see docs/DATABASE.md) — it exists so a logged-in user can discover
+    their own tenant(s), and structurally cannot answer "which tenants
+    have any member at all," since this backend sweep has no single user
+    in context. Reusing the app role here wouldn't bypass tenant isolation
+    (there's no tenant_id check to bypass), it would just always return
+    zero rows, silently filtering every tenant, real or not — confirmed
+    the hard way when the first version of this fix broke the daily
+    rotation for the real tenant, caught by
+    test_trigger_autonomous_campaign_runs_all_tenants_covers_every_tenant
+    and its two siblings before this ever reached a schedule. Same
+    narrow-admin-connection-for-a-backend-script precedent as
+    database/seeds/seed_dev_tenant.py — read-only here, and only for this
+    one check.
+
+    Creates and disposes its own engine on every call rather than caching
+    one at module level — same reasoning as workers/README.md's
+    run_job_sync (a pooled asyncpg connection is bound to the event loop
+    that opened it; a cached engine reused across a different loop than
+    the one that created it raises asyncpg's own "another operation is in
+    progress"). This function runs at most a handful of times per ~15s
+    scheduler tick, so the extra connect/dispose cost is negligible next
+    to the certainty of never hitting that class of bug."""
+    engine = create_async_engine(_admin_engine_url())
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(text("SELECT DISTINCT tenant_id FROM memberships"))
+            return [row[0] for row in result.all()]
+    finally:
+        await engine.dispose()
+
+
 async def _send_pending_digests_all_tenants() -> None:
     """Fase 10: same tenant-agnostic shape as _retry_stuck_jobs_all_tenants
     below — closes the gap where Fase 9's auto_discovery_enabled campaigns
@@ -377,9 +444,7 @@ async def _send_pending_digests_all_tenants() -> None:
     alongside it, not instead of it; calling _maybe_send_pending_digests
     twice for the pilot tenant on the same tick is redundant but harmless
     (its own idempotency checks via audit_log make a second call a no-op)."""
-    async with async_session_factory() as db:
-        result = await db.execute(select(Tenant.id))  # tenants table has no RLS
-        tenant_ids = [row[0] for row in result.all()]
+    tenant_ids = await _real_tenant_ids()
 
     for tenant_id in tenant_ids:
         async with async_session_factory() as db:
@@ -498,9 +563,7 @@ async def _trigger_autonomous_campaign_runs_all_tenants() -> None:
     below — autonomous discovery is opted into per-campaign
     (auto_discovery_enabled), not gated behind the single hardcoded
     DAILY_DISCOVERY_TENANT_ID `_tick` still uses."""
-    async with async_session_factory() as db:
-        result = await db.execute(select(Tenant.id))  # tenants table has no RLS
-        tenant_ids = [row[0] for row in result.all()]
+    tenant_ids = await _real_tenant_ids()
 
     for tenant_id in tenant_ids:
         async with async_session_factory() as db:
@@ -625,9 +688,7 @@ async def _trigger_country_rotation(db, tenant_id: uuid.UUID) -> None:
 
 async def _trigger_country_rotation_all_tenants() -> None:
     """Tenant-agnostic, same shape as _trigger_autonomous_campaign_runs_all_tenants."""
-    async with async_session_factory() as db:
-        result = await db.execute(select(Tenant.id))  # tenants table has no RLS
-        tenant_ids = [row[0] for row in result.all()]
+    tenant_ids = await _real_tenant_ids()
 
     for tenant_id in tenant_ids:
         async with async_session_factory() as db:
@@ -644,9 +705,7 @@ async def _retry_stuck_jobs_all_tenants() -> None:
     discovery/digest for one configured tenant) — job-retry reliability
     isn't a feature of the daily-digest automation, it should apply
     regardless of whether that's even configured."""
-    async with async_session_factory() as db:
-        result = await db.execute(select(Tenant.id))  # tenants table has no RLS
-        tenant_ids = [row[0] for row in result.all()]
+    tenant_ids = await _real_tenant_ids()
 
     for tenant_id in tenant_ids:
         async with async_session_factory() as db:

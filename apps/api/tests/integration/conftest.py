@@ -82,15 +82,43 @@ async def app_session_factory():
 
 @pytest_asyncio.fixture
 async def two_tenants(admin_session):
-    from app.modules.tenancy.models import Tenant
+    """Each tenant gets a real user + membership, not just a bare Tenant
+    row -- workers/scheduler.py's "_all_tenants" sweeps now require at
+    least one Membership before touching a tenant (Fase 18: a leaked bare
+    Tenant row from an interrupted test run was picked up by the real
+    country-rotation sweep and started spending real API credits on a
+    tenant no human could ever log into). A tenant with no membership is
+    exactly what a real signup never produces, so tests must not produce
+    one either if they want to exercise the "every real tenant" sweeps."""
+    from app.modules.auth.models import User
+    from app.modules.tenancy.enums import Role
+    from app.modules.tenancy.models import Membership, Tenant
 
     tenant_a = Tenant(id=uuid.uuid4(), name=f"Test Tenant A {uuid.uuid4().hex[:6]}")
     tenant_b = Tenant(id=uuid.uuid4(), name=f"Test Tenant B {uuid.uuid4().hex[:6]}")
     admin_session.add_all([tenant_a, tenant_b])
+    await admin_session.flush()
+
+    user_a = User(auth_user_id=uuid.uuid4(), email=f"{uuid.uuid4().hex}@test.com")
+    user_b = User(auth_user_id=uuid.uuid4(), email=f"{uuid.uuid4().hex}@test.com")
+    admin_session.add_all([user_a, user_b])
+    await admin_session.flush()
+
+    admin_session.add_all(
+        [
+            Membership(user_id=user_a.id, tenant_id=tenant_a.id, role=Role.ADMIN),
+            Membership(user_id=user_b.id, tenant_id=tenant_b.id, role=Role.ADMIN),
+        ]
+    )
     await admin_session.commit()
 
     yield tenant_a, tenant_b
 
+    # Deleting the users is enough: memberships.user_id/.tenant_id are both
+    # ON DELETE CASCADE (see authenticated_client's own teardown comment).
+    await admin_session.delete(user_a)
+    await admin_session.delete(user_b)
+    await admin_session.commit()
     await admin_session.delete(tenant_a)
     await admin_session.delete(tenant_b)
     await admin_session.commit()
