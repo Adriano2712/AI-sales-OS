@@ -41,8 +41,24 @@ SEGMENT_TO_OSM_TAGS: dict[str, list[tuple[str, str]]] = {
 # get_apify_search_term) — never a guessed translation for an unmapped
 # country. An unmapped segment raises DiscoveryProviderError, same as the
 # OSM side.
+# Fase 17 (8-country rotation, restaurants only for now): each of these 6
+# new entries was verified with a real Apify call against a real city in
+# that country before being trusted here (see docs/DISCOVERY.md) — not
+# just translated from memory. clinics/b2b_services still have no verified
+# term beyond BR/US and correctly fall back to BR until they're actually
+# tested the same way (spec section 86 — don't invent evidence, including
+# an untested translation, for a country nobody's checked yet).
 SEGMENT_TO_APIFY_SEARCH_TERM: dict[str, dict[str, str]] = {
-    "restaurants": {"BR": "restaurante", "US": "restaurant"},
+    "restaurants": {
+        "BR": "restaurante",
+        "US": "restaurant",
+        "ES": "restaurante",
+        "PT": "restaurante",
+        "FR": "restaurant",
+        "GB": "restaurant",
+        "DE": "Restaurant",
+        "IT": "ristorante",
+    },
     "clinics": {"BR": "clínica médica", "US": "medical clinic"},
     "b2b_services": {"BR": "empresa de serviços", "US": "professional services company"},
 }

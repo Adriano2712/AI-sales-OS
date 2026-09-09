@@ -338,3 +338,27 @@ websites for the first two (`locations.jollibeefoods.com`,
 `sbarro.com/locations/...`) and correctly returned nothing for the third
 after excluding all four confirmed directory networks — 2 real gaps closed,
 1 correctly left as "not found" rather than mislinked.
+
+## Fase 17: 8-country rotation — Apify search terms for restaurants
+
+Daily-automation planning added 6 countries to the rotation (Brazil and the
+US already had verified terms): Spain, Portugal, France, the UK, Germany,
+Italy. Each new `SEGMENT_TO_APIFY_SEARCH_TERM["restaurants"]` entry was
+checked with a real `ApifyProvider.search()` call against a real city in
+that country before being trusted — not just translated from memory, same
+discipline as the original US fix (a guessed-but-untested translation is
+exactly the class of bug that fix was for).
+
+| Country | Term | Verified against | Real sample result |
+|---|---|---|---|
+| ES | restaurante | Madrid | "+ que delicia \| Restaurante brasileño Madrid" |
+| PT | restaurante | Lisboa | "Restaurante Das Marias" |
+| FR | restaurant | Paris | "Restaurant Bar des 'Deux Gares'" |
+| GB | restaurant | London | "Casa Nostra Restaurant" |
+| DE | Restaurant | Berlin | "Bollenpiepe Restaurant" |
+| IT | ristorante | Roma | "Ristorante NOA" |
+
+`clinics`/`b2b_services` are deliberately **not** extended to these
+countries yet — no one has run a real search to confirm those terms work
+outside BR/US, and per this file's own established rule, an untested
+translation is never trusted here just because it looks obviously right.
