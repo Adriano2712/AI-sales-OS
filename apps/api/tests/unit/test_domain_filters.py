@@ -47,6 +47,15 @@ def test_is_excluded_domain_multinational_label_match_is_exact_not_substring():
     assert not is_excluded_domain("nottripadvisor.com")
 
 
+def test_is_excluded_domain_matches_resmio_subdomain():
+    """Real gap found in the first unattended production run of the
+    country rotation (Berlin): "Bep of Meo" resolved to
+    pages.resmio.com/bep-of-meo/de -- a subdomain of the reservation
+    platform, not the bare domain -- same subdomain-matching need as
+    lacocinadeirma.restaurants-us.com above."""
+    assert is_excluded_domain("pages.resmio.com")
+
+
 def test_is_excluded_domain_matches_restaurantguru_across_tlds():
     """restaurantguru.com was excluded from Portugal validation;
     restaurantguru.it turned up separately during Italy validation -- a

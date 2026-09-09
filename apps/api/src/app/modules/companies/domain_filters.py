@@ -226,6 +226,20 @@ EXCLUDED_DOMAINS = frozenset(
         # aggregator -- like "La Crypte Polska" in France, this one small
         # business turned out to have unusually deep directory coverage.
         "bestogoo.com",
+        # Confirmed the hard way (Fase 18, first real unattended production
+        # run of the country rotation, Berlin): "Nam Thuan" had already
+        # cleanly resolved to None during manual validation the night
+        # before, but a fresh, real automated run turned up a *different*
+        # false positive this time -- asia-zone.com, a per-restaurant
+        # "menu" directory page. Confirms the search results aren't fully
+        # deterministic run to run, not that the earlier validation was
+        # wrong; the exclusion list keeps growing reactively regardless of
+        # whether a hit came from manual testing or a real scheduled run.
+        "asia-zone.com",
+        # Same real Berlin run ("Bep of Meo"): Resmio, a real German
+        # restaurant reservation platform (the OpenTable/TheFork of this
+        # market), not the restaurant's own site.
+        "resmio.com",
     }
 )
 
