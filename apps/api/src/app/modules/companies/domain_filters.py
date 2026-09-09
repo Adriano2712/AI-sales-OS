@@ -117,8 +117,72 @@ EXCLUDED_DOMAINS = frozenset(
         "lifecooler.com",
         "cityseeker.com",
         "menuweb.menu",
+        # Confirmed the hard way (Fase 18, real France/Paris validation of
+        # the 8-country rotation): a Paris-specific restaurant review/blog
+        # directory ("Le Severo" resolved to a per-restaurant review page
+        # embedding its own address, same shape as every other directory
+        # entry here).
+        "parisbymouth.com",
+        # Same France validation, a different restaurant ("La Crypte
+        # Polska"): a French local-business directory site
+        # ("Restaurants Ile-de-France > Restaurants Paris > ...").
+        "gralon.net",
+        # Same France validation ("Chez Denise"): a personal travel blog,
+        # not a directory network -- but its own snippet states outright
+        # "Chez Denise does not have a website", i.e. this exact result is
+        # itself evidence there is no owned site to find, not a missed one.
+        "scottjosephorlando.com",
+        # Same France validation ("Le Petit Marche"): a restaurant
+        # reservation platform (the OpenTable/TheFork of this search),
+        # not the restaurant's own site.
+        "autoreserve.com",
+        # Re-running the same 4 France companies after the above exclusions
+        # surfaced the *next* result down for each -- Paris being one of the
+        # most food-media-saturated cities in the world means this list
+        # grows faster here than in smaller cities (Denver, Lisboa): major
+        # restaurant-review publications/aggregators, not owned sites.
+        # ("Le Severo"'s eater.com result even contained the real site,
+        # lesevero.fr, plain-text inside its own snippet -- a real gap this
+        # exclusion-list approach can't recover on its own, since it only
+        # ever looks at the result's URL, not text embedded inside it.)
+        "eater.com",
+        "cityzeum.com",
+        "theinfatuation.com",
+        "mindtrip.ai",
+        # Third round on "La Crypte Polska": a Paris going-out/listings
+        # guide ("Sortir de Paris" -- category "Restaurants > Polonaise"),
+        # same per-venue-page-on-one-shared-domain shape as every other
+        # directory entry here.
+        "sortiraparis.com",
+        # Fourth and fifth rounds, same company ("La Crypte Polska"): two
+        # more French restaurant directories ("LesRestos", "Koifaire").
+        # This one small Paris business turned out to have unusually deep
+        # directory coverage; five clean directory hits in a row with
+        # nothing else surfacing is itself the evidence it has no
+        # independent site of its own, same conclusion as "La Cocina de
+        # Irma" and "Kasa Mia" above, not a search failure.
+        "lesrestos.com",
+        "koifaire.com",
+        # Confirmed the hard way (Fase 18, real UK/London validation of the
+        # 8-country rotation): "Nadri" resolved to wheree.com, a global
+        # reviews/listings aggregator ("Reviews, Photos & Phone Number...")
+        # after excluding tripadvisor.co.uk, same shape as every other
+        # directory entry here.
+        "wheree.com",
     }
 )
+
+# A handful of the networks above are confirmed multinational chains that
+# run a separate country-code TLD per market (found the hard way, Fase 18
+# UK/London validation: "Nadri" resolved to tripadvisor.co.uk, which the
+# exact-domain check above can't catch when only tripadvisor.com is
+# listed — the 8-country rotation makes every one of these TLD variants a
+# near-certainty eventually, not a one-off). Matched by the registrable
+# label alone so any country TLD of a *known* chain is caught without
+# having to list every variant one country at a time; kept as its own
+# small, explicit set (not applied to every EXCLUDED_DOMAINS entry) so an
+# unrelated site that happens to share a generic word isn't swept in.
+_MULTINATIONAL_DIRECTORY_LABELS = frozenset({"tripadvisor"})
 
 
 def domain(url: str) -> str:
@@ -136,7 +200,10 @@ def is_excluded_domain(host: str) -> bool:
     (`lacocinadeirma.restaurants-us.com`) would silently pass an exact
     `host in EXCLUDED_DOMAINS` membership check, since no two businesses
     share the same subdomain."""
-    return any(host == excluded or host.endswith(f".{excluded}") for excluded in EXCLUDED_DOMAINS)
+    if any(host == excluded or host.endswith(f".{excluded}") for excluded in EXCLUDED_DOMAINS):
+        return True
+    label = host.split(".", 1)[0]
+    return label in _MULTINATIONAL_DIRECTORY_LABELS
 
 
 def is_excluded_website(url: str | None) -> bool:

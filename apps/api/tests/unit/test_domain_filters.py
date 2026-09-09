@@ -33,6 +33,20 @@ def test_is_excluded_domain_does_not_match_unrelated_domain():
     assert not is_excluded_domain("notfacebook.com")
 
 
+def test_is_excluded_domain_matches_a_known_multinational_chains_other_tld():
+    """Real gap found during Fase 18's UK/London validation: "Nadri"
+    resolved to tripadvisor.co.uk, a country-code TLD variant the exact
+    tripadvisor.com entry can't catch -- TripAdvisor (and any other
+    confirmed multinational chain) runs a separate TLD per market, and the
+    8-country rotation makes hitting another one a near-certainty."""
+    assert is_excluded_domain("tripadvisor.co.uk")
+    assert is_excluded_domain("tripadvisor.fr")
+
+
+def test_is_excluded_domain_multinational_label_match_is_exact_not_substring():
+    assert not is_excluded_domain("nottripadvisor.com")
+
+
 def test_is_excluded_website_matches_a_full_url():
     """Real gap found during Fase 18's Portugal validation: Overpass/Apify
     themselves sometimes report a Facebook page directly as `website` in
