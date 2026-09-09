@@ -47,6 +47,15 @@ def test_is_excluded_domain_multinational_label_match_is_exact_not_substring():
     assert not is_excluded_domain("nottripadvisor.com")
 
 
+def test_is_excluded_domain_matches_restaurantguru_across_tlds():
+    """restaurantguru.com was excluded from Portugal validation;
+    restaurantguru.it turned up separately during Italy validation -- a
+    second real sighting confirming it's the same multinational network,
+    not a guess, so it joined the same registrable-label matching as
+    tripadvisor rather than being listed one TLD at a time."""
+    assert is_excluded_domain("restaurantguru.it")
+
+
 def test_is_excluded_website_matches_a_full_url():
     """Real gap found during Fase 18's Portugal validation: Overpass/Apify
     themselves sometimes report a Facebook page directly as `website` in

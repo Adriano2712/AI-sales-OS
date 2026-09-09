@@ -186,6 +186,46 @@ EXCLUDED_DOMAINS = frozenset(
         # HappyCow, a real vegan/vegetarian restaurant review directory,
         # not the restaurant's own site.
         "happycow.net",
+        # Confirmed the hard way (Fase 18, real Italy/Roma validation of
+        # the 8-country rotation): Time Out, a real multinational city
+        # magazine/listings network (same class as Eater above), not the
+        # restaurant's own site.
+        "timeout.com",
+        # Same Roma validation ("Dar filettaro a Santa Barbara"): a travel-
+        # guide/blog directory site.
+        "likealocalguide.com",
+        # Same Roma validation ("Rosati"): an Italian food/confectionery
+        # business directory.
+        "dolciumi.info",
+        # Same Roma validation ("Trattoria Ada e Mario"): Agrodolce, a real
+        # Italian food-media/restaurant-guide site.
+        "agrodolce.it",
+        # Same Roma validation ("Papero Giallo", "Pizzeria Formula 1"):
+        # Rome's own official tourism board site -- a government hospitality
+        # listing, not the business's own site, same as denverdowntown.com
+        # above (an official/aggregator directory, not evidence of an owned
+        # domain).
+        "turismoroma.it",
+        # Same Roma validation ("Gustosando"): Moovit, a public-transit
+        # directions app/site -- surfaced because it has a page for "how to
+        # get to" this restaurant, never a business's own site.
+        "moovitapp.com",
+        # Second round, same Roma validation: an Italian restaurant review/
+        # ordering directory (the TheFork/Zomato of this search), surfaced
+        # for both "Pizzeria ai Marmi" and "Trattoria Ada e Mario" once
+        # timeout.com/agrodolce.it were excluded.
+        "sluurpy.it",
+        # Second round on "Dar filettaro a Santa Barbara": a Rome city
+        # guide/media site.
+        "roma.com",
+        # Second round on "Papero Giallo": Pagine Gialle, Italy's own
+        # Yellow Pages business directory.
+        "paginegialle.it",
+        # Third round on "Trattoria Ada e Mario" (after restaurantguru.it,
+        # sluurpy.it): Bestogoo, another restaurant review/directory
+        # aggregator -- like "La Crypte Polska" in France, this one small
+        # business turned out to have unusually deep directory coverage.
+        "bestogoo.com",
     }
 )
 
@@ -199,7 +239,10 @@ EXCLUDED_DOMAINS = frozenset(
 # having to list every variant one country at a time; kept as its own
 # small, explicit set (not applied to every EXCLUDED_DOMAINS entry) so an
 # unrelated site that happens to share a generic word isn't swept in.
-_MULTINATIONAL_DIRECTORY_LABELS = frozenset({"tripadvisor"})
+# "restaurantguru" joined this set the same way: confirmed operating both
+# restaurantguru.com (Portugal validation) and restaurantguru.it (Italy
+# validation) -- a second real sighting, not a guess.
+_MULTINATIONAL_DIRECTORY_LABELS = frozenset({"tripadvisor", "restaurantguru"})
 
 
 def domain(url: str) -> str:
