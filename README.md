@@ -47,9 +47,13 @@ Ver [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 - [DASHBOARD.md](docs/DASHBOARD.md) — Dashboard + métricas
 - [MESSAGES.md](docs/MESSAGES.md) — SDR Assistido / Message Generation
 - [DAILY_DIGEST.md](docs/DAILY_DIGEST.md) — Descoberta diária (Brasil inteiro) + resumo por email
+- [ANALYTICS.md](docs/ANALYTICS.md) — métricas e página /analytics
+- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — rodando worker/scheduler como processo persistente (Windows)
 - [SECURITY.md](docs/SECURITY.md) — secrets, authN/authZ, LGPD
 
 ## Fases
+
+Plano original (master prompt):
 
 | Fase | Escopo | Status |
 |---|---|---|
@@ -61,9 +65,17 @@ Ver [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 | 5 | Business Analysis | Completa |
 | 6 | Opportunity Engine | Completa |
 | 7 | Dashboard | Completa |
-| 8 | SDR Assistido | Em revisão |
-| 9 | Experimento real (100 empresas) | Não iniciada |
+| 8 | SDR Assistido | Completa |
+| 9 | Experimento real (100 empresas) | Completa |
 
 Cada fase segue: analisar → planejar → apresentar → aguardar aprovação →
 implementar → testar → autorrevisar → relatar → aguardar aprovação. Nenhuma
 fase avança sem aprovação explícita.
+
+Além do plano original, iteração contínua pós-lançamento (rodando campanhas
+reais) já passou por mais ~18 fases incrementais — multi-model AI Gateway,
+Opportunity Score 2.0, Smart Refill, Daily Opportunity Report, Analytics,
+fallback de busca de site via Brave Search, email como campo core, geração
+automática de mensagens, e a rotação diária de descoberta em 8 países com
+daemons persistentes no Windows (ver [DEPLOYMENT.md](docs/DEPLOYMENT.md) e
+`git log --grep="^Fase"` para o histórico completo).
