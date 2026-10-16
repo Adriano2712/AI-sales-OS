@@ -65,6 +65,20 @@ async def analyze_business(
         await get_latest_website_analysis(db, tenant_id, company.id) if has_website else None
     )
     website_digital_score = website_analysis.digital_score if website_analysis else None
+    website_sub_scores = (
+        [
+            s
+            for s in (
+                website_analysis.score_funcionamento,
+                website_analysis.score_mobile,
+                website_analysis.score_conversao,
+                website_analysis.score_conteudo,
+            )
+            if s is not None
+        ]
+        if website_analysis
+        else None
+    )
 
     evidence_list = await list_evidence_for_company(db, tenant_id, company.id)
     has_opening_hours_evidence = any(e.claim.startswith("opening_hours:") for e in evidence_list)
@@ -74,6 +88,7 @@ async def analyze_business(
         website_digital_score=website_digital_score,
         has_phone=bool(company.phone),
         has_opening_hours_evidence=has_opening_hours_evidence,
+        website_sub_scores=website_sub_scores,
     )
 
     website_findings = None

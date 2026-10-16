@@ -92,3 +92,50 @@ alguém fechar o PowerShell deles. A única coisa que falta é a
 persistência **através de reinícios/logins** — por isso essa etapa deve
 ser feita para o "roda sozinho todo dia" valer mesmo depois de reiniciar
 o Windows.
+
+## Real, encontrado em produção: as tarefas morrem sozinhas (LogonType Interactive)
+
+Durante a Fase 18 (rodando de verdade num notebook, não numa VM sempre
+ligada), `AISalesOS-Worker`/`AISalesOS-Scheduler` pararam sozinhas
+**três vezes numa única tarde**, sempre com `LastTaskResult 3221225786`
+(`STATUS_CONTROL_C_EXIT`, `0xC000013A`) — o código que o Windows dá
+quando um processo preso a uma sessão interativa recebe um sinal de
+fechamento de sessão/console. Investigado com `Get-WinEvent`, não
+"assumido":
+
+- Uma das três quedas coincidiu com `Kernel-Power` Id 41 no log System —
+  "O sistema foi reiniciado sem um desligamento correto primeiro"
+  (o notebook travou/perdeu energia de verdade, não é um bug do app).
+- A causa raiz de fundo, independente do reinício físico: as duas tarefas
+  foram registradas com `Principal.LogonType = Interactive` (padrão do
+  `Register-ScheduledTask` sem `-LogonType` explícito) — presas à sessão
+  interativa do usuário `Samsung`. Qualquer coisa que derrube essa sessão
+  (crash, sono/hibernação, tela de bloqueio em algumas configurações) tira
+  o processo junto, não só num reinício de verdade.
+
+**A correção real é trocar `LogonType` pra `S4U`** ("executar quer o
+usuário esteja conectado ou não", sem precisar guardar senha) e
+**adicionar um trigger `-AtStartup`** (além do `-AtLogOn` já existente),
+pra sobreviver tanto a um logoff/bloqueio quanto a um reinício completo
+sem precisar que alguém entre de novo interativamente.
+
+**Por que isso não foi corrigido automaticamente por uma sessão do Claude
+Code**: `Set-ScheduledTask` (pra mudar Principal ou Triggers) e
+`schtasks /Change` retornam **"Acesso negado"** de dentro dessa sessão —
+o mesmo tipo de restrição de sandbox já documentada acima pra
+`Register-ScheduledTask`/criação. Rode isto **uma vez**, num PowerShell
+normal (fora do Claude Code) — não precisa ser administrador, mas se der
+erro de permissão em `-LogonType S4U`, tente numa janela "Executar como
+administrador":
+
+```powershell
+$principal = New-ScheduledTaskPrincipal -UserId "Samsung" -LogonType S4U -RunLevel Limited
+$triggers = @((New-ScheduledTaskTrigger -AtLogOn), (New-ScheduledTaskTrigger -AtStartup))
+
+Set-ScheduledTask -TaskName "AISalesOS-Worker" -Principal $principal -Trigger $triggers
+Set-ScheduledTask -TaskName "AISalesOS-Scheduler" -Principal $principal -Trigger $triggers
+```
+
+Depois de rodar isso uma vez, as duas tarefas passam a sobreviver a
+sono/bloqueio de tela e a reiniciar sozinhas logo depois de um boot,
+sem depender de alguém logar interativamente primeiro.

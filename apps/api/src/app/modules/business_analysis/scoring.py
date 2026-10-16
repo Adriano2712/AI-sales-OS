@@ -23,14 +23,32 @@ class DeterministicScores:
 
 
 def compute_digital_maturity_score(
-    has_website: bool, website_digital_score: float | None
+    has_website: bool,
+    website_digital_score: float | None,
+    website_sub_scores: list[float] | None = None,
 ) -> float | None:
     """No website at all is itself a measured fact (0), not a guess. A
     website that exists but hasn't been analyzed yet is genuinely unknown —
-    stays None rather than assuming either extreme."""
+    stays None rather than assuming either extreme.
+
+    Real gap found running actual campaigns (Sorocaba/Itu/Recife/Rio de
+    Janeiro, 2026-09): `website_digital_score` is itself a weighted
+    *average* over funcionamento/mobile/conversão/conteúdo
+    (`website_analysis/scoring.py`'s `compute_digital_score`) — a site that
+    scores 0 on conversão or mobile but does fine elsewhere still averages
+    out to a "GOOD" blended score, which made a real, specific, sellable
+    gap (e.g. "site não converte no celular") invisible to need_score and
+    silently pushed the opportunity to LOW. Blending the aggregate with the
+    single weakest evaluated dimension means one badly-failing sub-score
+    pulls this down instead of being diluted away by the others — the
+    business still has a genuinely good site overall, but the specific gap
+    now shows up as real need instead of vanishing into an average."""
     if not has_website:
         return 0.0
-    return website_digital_score
+    if website_digital_score is None or not website_sub_scores:
+        return website_digital_score
+    weakest = min(website_sub_scores)
+    return round((website_digital_score + weakest) / 2, 1)
 
 
 def compute_activity_score(
@@ -58,8 +76,11 @@ def compute_deterministic_scores(
     website_digital_score: float | None,
     has_phone: bool,
     has_opening_hours_evidence: bool,
+    website_sub_scores: list[float] | None = None,
 ) -> DeterministicScores:
-    digital_maturity = compute_digital_maturity_score(has_website, website_digital_score)
+    digital_maturity = compute_digital_maturity_score(
+        has_website, website_digital_score, website_sub_scores
+    )
     return DeterministicScores(
         activity_score=compute_activity_score(has_phone, has_website, has_opening_hours_evidence),
         digital_maturity_score=digital_maturity,

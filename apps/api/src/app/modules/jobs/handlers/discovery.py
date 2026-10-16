@@ -122,6 +122,13 @@ async def _discover_and_process_city(
     # resolution/merge step below, not by pre-splitting the target between
     # providers.
     await set_tenant_context(db, tenant_uuid)
+    # Same expired-attribute hazard as `_run`'s campaign_target_quantity/
+    # campaign_cities fix: this function gets called multiple times per run
+    # (once per city, again per refill pass), and every earlier call's own
+    # per-company `db.commit()`s below expire `campaign`'s attributes in
+    # between calls. A plain `db.refresh()` before touching them is cheap
+    # and always safe, whether or not they were actually expired.
+    await db.refresh(campaign)
     provider_results = await asyncio.gather(
         *[
             _search_one_provider(
@@ -291,7 +298,13 @@ async def _run(job_id: str, tenant_id: str, campaign_run_id: str) -> None:
         run.status = CampaignRunStatus.RUNNING
         await db.commit()
 
-        per_city_targets = split_target(campaign.target_quantity, len(campaign.cities))
+        # Plain local copies, not `campaign.target_quantity`/`campaign.cities`
+        # kept around as ORM attribute access — see the MissingGreenlet fix
+        # note below for why touching them on the `campaign` object itself
+        # after any commit blows up.
+        campaign_target_quantity = campaign.target_quantity
+        campaign_cities = list(campaign.cities)
+        per_city_targets = split_target(campaign_target_quantity, len(campaign_cities))
         errors: list[dict] = []
         found = 0
         validated = 0
@@ -301,7 +314,7 @@ async def _run(job_id: str, tenant_id: str, campaign_run_id: str) -> None:
         touched_company_ids: list[uuid.UUID] = []
 
         for index, (city, city_target) in enumerate(
-            zip(campaign.cities, per_city_targets, strict=True)
+            zip(campaign_cities, per_city_targets, strict=True)
         ):
             if index > 0:
                 await asyncio.sleep(_PROVIDER_REQUEST_DELAY_SECONDS)
@@ -336,7 +349,20 @@ async def _run(job_id: str, tenant_id: str, campaign_run_id: str) -> None:
             db, tenant_uuid, touched_company_ids
         )
         seen_company_ids = set(touched_company_ids)
-        while usable_found < campaign.target_quantity and refill_attempts < _MAX_REFILL_PASSES:
+        # Real bug found running an actual Rio de Janeiro campaign (not by a
+        # mocked test): this loop used to read `campaign.target_quantity`/
+        # `campaign.cities` directly. `campaign`, loaded once at the top of
+        # `_run`, gets its attributes expired by every `db.commit()` inside
+        # `_discover_and_process_city` (SQLAlchemy's default
+        # `expire_on_commit`) — by the second refill pass (or the second
+        # city of a multi-city campaign), touching those attributes without
+        # an awaited reload first raises `MissingGreenlet`, since the ORM's
+        # synchronous lazy-load path doesn't work inside this async session.
+        # Using the plain local copies captured above sidesteps this
+        # entirely — see also `_discover_and_process_city`'s own
+        # `db.refresh(campaign)` for the `campaign.segment`/`state`/
+        # `country` reads it does internally.
+        while usable_found < campaign_target_quantity and refill_attempts < _MAX_REFILL_PASSES:
             refill_attempts += 1
             # Overpass returns the same query's full result set regardless
             # of `limit` (only local truncation changes) and Apify's actor
@@ -347,7 +373,7 @@ async def _run(job_id: str, tenant_id: str, campaign_run_id: str) -> None:
             expanded_targets = [t * (refill_attempts + 1) for t in per_city_targets]
             pass_found_new = False
             for index, (city, city_limit) in enumerate(
-                zip(campaign.cities, expanded_targets, strict=True)
+                zip(campaign_cities, expanded_targets, strict=True)
             ):
                 await asyncio.sleep(_PROVIDER_REQUEST_DELAY_SECONDS)
                 pass_result = await _discover_and_process_city(

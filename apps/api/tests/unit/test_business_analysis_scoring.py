@@ -22,6 +22,35 @@ def test_digital_maturity_mirrors_website_digital_score():
     assert compute_digital_maturity_score(has_website=True, website_digital_score=72.5) == 72.5
 
 
+def test_digital_maturity_mirrors_aggregate_when_no_sub_scores_given():
+    """Backward-compatible default: callers that don't pass sub-scores
+    (or pass an empty list) get the old behavior unchanged."""
+    assert (
+        compute_digital_maturity_score(has_website=True, website_digital_score=72.5, website_sub_scores=[])
+        == 72.5
+    )
+
+
+def test_digital_maturity_pulled_down_by_a_single_weak_sub_score():
+    """Real gap found running actual campaigns (2026-09): a site averaging
+    73.6 overall but scoring 0 on mobile still has a real, specific,
+    sellable problem — the blended average alone hid it. Blending in the
+    weakest evaluated dimension surfaces it instead."""
+    assert compute_digital_maturity_score(
+        has_website=True,
+        website_digital_score=73.6,
+        website_sub_scores=[100.0, 0.0, 100.0, 50.0],
+    ) == round((73.6 + 0.0) / 2, 1)
+
+
+def test_digital_maturity_unaffected_when_no_sub_score_is_weak():
+    assert compute_digital_maturity_score(
+        has_website=True,
+        website_digital_score=80.0,
+        website_sub_scores=[80.0, 85.0, 75.0, 90.0],
+    ) == round((80.0 + 75.0) / 2, 1)
+
+
 def test_activity_score_all_signals_present():
     assert compute_activity_score(has_phone=True, has_website=True, has_opening_hours_evidence=True) == 100.0
 

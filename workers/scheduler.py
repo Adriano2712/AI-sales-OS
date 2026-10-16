@@ -20,7 +20,7 @@ import asyncio
 import os
 import sys
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -584,16 +584,22 @@ _ROTATION_CAMPAIGN_PREFIX = "Rotação Diária (auto)"
 # one-line code change, and keeping it in code means it ships with the
 # same review/test discipline as the search terms it depends on.
 _COUNTRY_ROTATION: list[tuple[str, str, str]] = [
-    ("BR", "Sorocaba", "SP"),
-    ("US", "Chicago", "IL"),
     ("ES", "Madrid", "Madrid"),
     ("PT", "Lisboa", "Lisboa"),
     ("FR", "Paris", "Ile-de-France"),
     ("GB", "London", "England"),
     ("DE", "Berlin", "Berlin"),
     ("IT", "Roma", "Lazio"),
+    ("BR", "Sorocaba", "SP"),
+    ("US", "Chicago", "IL"),
 ]
 _ROTATION_TARGET_QUANTITY = 5
+# User's explicit request: today (whenever this shipped) starts the
+# sequence at Spain (index 0 above), then a different country each
+# following day, in list order — an anchor date rather than a raw
+# `date.today().toordinal() % 8` so "today = ES" doesn't depend on
+# where in the 8-day cycle the calendar date itself happens to fall.
+_ROTATION_EPOCH = date(2026, 9, 9)
 # The user explicitly wants this to not fire in the middle of the Brazilian
 # night — _ensure_todays_run's own date boundary is already Brazil-local
 # (_TZ), but a bare date boundary alone would trigger on the very first
@@ -606,7 +612,8 @@ _ROTATION_MIN_HOUR = 8
 
 
 def _todays_rotation_entry() -> tuple[str, str, str]:
-    return _COUNTRY_ROTATION[datetime.now(_TZ).toordinal() % len(_COUNTRY_ROTATION)]
+    days_since_epoch = (datetime.now(_TZ).date() - _ROTATION_EPOCH).days
+    return _COUNTRY_ROTATION[days_since_epoch % len(_COUNTRY_ROTATION)]
 
 
 async def _get_or_create_rotation_campaign(
